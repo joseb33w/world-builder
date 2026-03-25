@@ -12,6 +12,9 @@
 </head>
 <body>
   <div id="app"></div>
+  <!-- Focus fix & audio must load BEFORE app.js (regular scripts, not modules) -->
+  <script src="focus-fix.js"></script>
+  <script src="audio.js"></script>
   <script type="module" src="app.js" crossorigin="anonymous"></script>
 </body>
 </html>
