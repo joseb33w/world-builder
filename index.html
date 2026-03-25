@@ -15,6 +15,8 @@
   <!-- Focus fix & audio must load BEFORE app.js (regular scripts, not modules) -->
   <script src="focus-fix.js"></script>
   <script src="audio.js"></script>
+  <!-- Anonymous auth bootstrap -- must complete before app.js starts -->
+  <script type="module" src="auth-init.js"></script>
   <script type="module" src="app.js" crossorigin="anonymous"></script>
 </body>
 </html>
