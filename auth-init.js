@@ -1,13 +1,13 @@
 /**
- * auth-init.js -- Anonymous authentication bootstrap for World Builder
+ * auth-init.js -- Email/password authentication for World Builder
  *
  * Runs BEFORE app.js (top-level await in ES module).
- * Signs the user in anonymously so Supabase RLS policies
- * (which require auth.uid()) are satisfied for all DB operations.
+ * If no session exists, shows a full-screen auth overlay.
+ * Once authenticated, the overlay is removed and app.js loads.
  *
  * Supabase persists sessions in localStorage, so when app.js
  * creates its own client with the same URL/key, it picks up
- * the anonymous session automatically.
+ * the session automatically.
  */
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm'
 
@@ -17,16 +17,271 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 try {
   const { data: { session } } = await supabase.auth.getSession()
-  if (!session) {
-    const { data, error } = await supabase.auth.signInAnonymously()
-    if (error) {
-      console.error('[auth-init] Anonymous sign-in failed:', error.message)
-    } else {
-      console.log('[auth-init] Anonymous session created, uid:', data?.user?.id)
-    }
-  } else {
+  if (session) {
     console.log('[auth-init] Existing session found, uid:', session.user?.id)
+  } else {
+    console.log('[auth-init] No session -- showing auth overlay')
+    await showAuthOverlay()
   }
 } catch (e) {
   console.error('[auth-init] Auth bootstrap error:', e.message)
+}
+
+function friendlyError(msg) {
+  const t = String(msg || '')
+  if (/invalid login credentials/i.test(t)) return 'Incorrect email or password.'
+  if (/email not confirmed/i.test(t)) return 'Please check your email and click the confirmation link first.'
+  if (/already been registered|user already registered/i.test(t)) return 'An account with this email already exists. Try signing in.'
+  if (/email rate limit/i.test(t)) return 'Too many attempts. Please wait a moment.'
+  if (/network/i.test(t)) return 'Network error. Check your connection and try again.'
+  return t || 'Something went wrong.'
+}
+
+function showAuthOverlay() {
+  return new Promise((resolve) => {
+    // Inject scoped styles
+    const styleEl = document.createElement('style')
+    styleEl.id = 'wb-auth-style'
+    styleEl.textContent = `
+      #wb-auth-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        display: grid; place-items: center;
+        background:
+          radial-gradient(circle at 30% 20%, rgba(99,102,241,0.25), transparent 40%),
+          radial-gradient(circle at 70% 80%, rgba(139,92,246,0.2), transparent 40%),
+          #0a0e1a;
+        font-family: 'Inter', system-ui, sans-serif;
+        color: #f0f4ff;
+      }
+      #wb-auth-card {
+        width: min(420px, calc(100% - 32px));
+        background: rgba(17, 24, 39, 0.95);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 24px;
+        padding: 36px 28px;
+        text-align: center;
+        box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+      }
+      #wb-auth-card .wb-logo {
+        font-size: 2.5rem; margin-bottom: 12px; display: block;
+      }
+      #wb-auth-card h1 {
+        font-family: 'Press Start 2P', monospace;
+        font-size: 1.2rem; margin: 0 0 8px;
+        background: linear-gradient(135deg, #6366f1, #f472b6);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      }
+      #wb-auth-card p.wb-sub {
+        color: #8b95b0; line-height: 1.6; margin: 0 0 24px;
+      }
+      #wb-auth-card .wb-form-group {
+        margin-bottom: 14px; text-align: left;
+      }
+      #wb-auth-card label {
+        display: block; margin-bottom: 6px; font-size: 0.82rem;
+        text-transform: uppercase; letter-spacing: 0.1em;
+        color: #8b95b0; font-weight: 700;
+      }
+      #wb-auth-card input {
+        width: 100%; padding: 14px 18px;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 14px;
+        color: #f0f4ff; font-size: 1rem; outline: none;
+        box-sizing: border-box;
+      }
+      #wb-auth-card input:focus {
+        border-color: #6366f1;
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.2);
+      }
+      #wb-auth-card .wb-error {
+        color: #f87171; min-height: 20px; text-align: center;
+        font-size: 0.88rem; margin-bottom: 10px;
+      }
+      #wb-auth-card .wb-btn-primary {
+        width: 100%; padding: 14px;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        border: none; border-radius: 14px;
+        color: white; font-weight: 800; font-size: 1rem;
+        cursor: pointer; margin-bottom: 12px;
+        box-shadow: 0 8px 24px rgba(99,102,241,0.3);
+        transition: transform 0.15s, opacity 0.15s;
+      }
+      #wb-auth-card .wb-btn-primary:hover { transform: translateY(-1px); }
+      #wb-auth-card .wb-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+      #wb-auth-card .wb-switch {
+        background: none; border: none;
+        color: #8b95b0; cursor: pointer; font-size: 0.9rem;
+      }
+      #wb-auth-card .wb-switch strong { color: #fbbf24; }
+      #wb-auth-card .wb-check-email {
+        padding: 20px 0;
+      }
+      #wb-auth-card .wb-check-email .wb-icon {
+        font-size: 2.5rem; margin-bottom: 12px; display: block;
+        color: #22d3ee;
+      }
+      #wb-auth-card .wb-check-email p {
+        color: #8b95b0; line-height: 1.7; margin: 0 0 20px;
+      }
+      #wb-auth-card .wb-btn-secondary {
+        width: 100%; padding: 14px;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 14px;
+        color: #f0f4ff; font-weight: 700; font-size: 0.95rem;
+        cursor: pointer;
+        transition: transform 0.15s;
+      }
+      #wb-auth-card .wb-btn-secondary:hover { transform: translateY(-1px); }
+    `
+    document.head.appendChild(styleEl)
+
+    let mode = 'signin' // 'signin' | 'signup' | 'check-email'
+    let pendingEmail = ''
+    let busy = false
+
+    function getOverlay() { return document.getElementById('wb-auth-overlay') }
+
+    function cleanup() {
+      const ov = getOverlay()
+      if (ov) ov.remove()
+      const st = document.getElementById('wb-auth-style')
+      if (st) st.remove()
+    }
+
+    function renderAuthUI() {
+      let overlay = getOverlay()
+      if (!overlay) {
+        overlay = document.createElement('div')
+        overlay.id = 'wb-auth-overlay'
+        document.body.appendChild(overlay)
+      }
+
+      if (mode === 'check-email') {
+        overlay.innerHTML = `
+          <div id="wb-auth-card">
+            <div class="wb-check-email">
+              <span class="wb-icon"><i class="fa-solid fa-envelope-open-text"></i></span>
+              <h1>Check your email</h1>
+              <p>We sent a confirmation link to <strong>${pendingEmail}</strong>. Click the link in the email, then come back and sign in.</p>
+              <button class="wb-btn-secondary" id="wb-goto-signin">Go to Sign In</button>
+            </div>
+          </div>
+        `
+        document.getElementById('wb-goto-signin').addEventListener('click', () => {
+          mode = 'signin'
+          renderAuthUI()
+        })
+        return
+      }
+
+      const isSignup = mode === 'signup'
+      overlay.innerHTML = `
+        <div id="wb-auth-card">
+          <span class="wb-logo"><i class="fa-solid fa-cubes"></i></span>
+          <h1>World Builder</h1>
+          <p class="wb-sub">${isSignup ? 'Create an account to start building.' : 'Sign in to your world.'}</p>
+          <form id="wb-auth-form">
+            <div class="wb-form-group">
+              <label>Email</label>
+              <input type="email" id="wb-email" required autocomplete="email">
+            </div>
+            <div class="wb-form-group">
+              <label>Password</label>
+              <input type="password" id="wb-password" required minlength="6" autocomplete="${isSignup ? 'new-password' : 'current-password'}">
+            </div>
+            <div class="wb-error" id="wb-error"></div>
+            <button class="wb-btn-primary" type="submit" id="wb-submit">${isSignup ? 'Create account' : 'Sign in'}</button>
+          </form>
+          <button class="wb-switch" id="wb-switch">${isSignup ? 'Already have an account? <strong>Sign in</strong>' : "Don't have an account? <strong>Sign up</strong>"}</button>
+        </div>
+      `
+
+      document.getElementById('wb-switch').addEventListener('click', () => {
+        mode = isSignup ? 'signin' : 'signup'
+        renderAuthUI()
+      })
+
+      document.getElementById('wb-auth-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        if (busy) return
+        busy = true
+
+        const email = document.getElementById('wb-email').value.trim().toLowerCase()
+        const password = document.getElementById('wb-password').value
+        const errorEl = document.getElementById('wb-error')
+        const submitBtn = document.getElementById('wb-submit')
+        errorEl.textContent = ''
+        submitBtn.disabled = true
+        submitBtn.textContent = isSignup ? 'Creating account...' : 'Signing in...'
+
+        try {
+          if (isSignup) {
+            const { data, error } = await supabase.auth.signUp({
+              email,
+              password,
+              options: { emailRedirectTo: 'https://sling-gogiapp.web.app/email-confirmed.html' }
+            })
+
+            if (error) {
+              if (/already been registered|user already registered/i.test(error.message)) {
+                // Try signing in instead
+                const signIn = await supabase.auth.signInWithPassword({ email, password })
+                if (signIn.error) {
+                  errorEl.textContent = friendlyError(signIn.error.message)
+                  return
+                }
+                console.log('[auth-init] Signed in (existing user), uid:', signIn.data.user?.id)
+                cleanup()
+                resolve()
+                return
+              }
+              errorEl.textContent = friendlyError(error.message)
+              return
+            }
+
+            if (data?.session?.user) {
+              console.log('[auth-init] Signed up + auto-confirmed, uid:', data.session.user.id)
+              cleanup()
+              resolve()
+              return
+            }
+
+            // Email confirmation needed
+            pendingEmail = email
+            mode = 'check-email'
+            renderAuthUI()
+            return
+          }
+
+          // Sign in
+          const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+          if (error) {
+            errorEl.textContent = friendlyError(error.message)
+            return
+          }
+          console.log('[auth-init] Signed in, uid:', data.user?.id)
+          cleanup()
+          resolve()
+        } catch (err) {
+          errorEl.textContent = friendlyError(err.message)
+        } finally {
+          busy = false
+          const btn = document.getElementById('wb-submit')
+          if (btn) {
+            btn.disabled = false
+            btn.textContent = isSignup ? 'Create account' : 'Sign in'
+          }
+        }
+      })
+    }
+
+    // Mount once DOM is ready
+    if (document.body) {
+      renderAuthUI()
+    } else {
+      document.addEventListener('DOMContentLoaded', () => renderAuthUI())
+    }
+  })
 }
