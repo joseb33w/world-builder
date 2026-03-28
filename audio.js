@@ -346,15 +346,14 @@
   installGlobalInteractionHooks()
 
   window.WorldAudio = {
-    ensureContext,
     resume,
-    toggleMute,
     setMuted,
+    toggleMute,
     playClick,
     playChatBlip,
     playConstruction,
     setWeather,
     setDayPhase,
-    isMuted: () => muted
+    attachToggleButton
   }
 })()

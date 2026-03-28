@@ -25,23 +25,23 @@ try {
   const WEATHER_ICONS = { sunny: 'fa-sun', cloudy: 'fa-cloud', rain: 'fa-cloud-rain', snow: 'fa-snowflake', fog: 'fa-smog' }
 
   const BUILDING_TYPES = {
-    house: { emoji: 'HOUSE', baseColor: '#4ade80', floors: 2 },
-    shop: { emoji: 'SHOP', baseColor: '#fbbf24', floors: 1 },
-    factory: { emoji: 'FACTORY', baseColor: '#9ca3af', floors: 2 },
-    castle: { emoji: 'CASTLE', baseColor: '#a78bfa', floors: 4 },
-    tower: { emoji: 'TOWER', baseColor: '#60a5fa', floors: 5 },
-    church: { emoji: 'CHURCH', baseColor: '#f9fafb', floors: 3 },
-    stadium: { emoji: 'STADIUM', baseColor: '#34d399', floors: 2 },
-    hospital: { emoji: 'HOSPITAL', baseColor: '#fca5a5', floors: 3 },
-    school: { emoji: 'SCHOOL', baseColor: '#fde68a', floors: 2 },
-    restaurant: { emoji: 'RESTAURANT', baseColor: '#fb923c', floors: 1 },
-    hotel: { emoji: 'HOTEL', baseColor: '#c084fc', floors: 4 },
-    park: { emoji: 'PARK', baseColor: '#86efac', floors: 0 },
-    fountain: { emoji: 'FOUNTAIN', baseColor: '#67e8f9', floors: 0 },
-    skyscraper: { emoji: 'SKYSCRAPER', baseColor: '#93c5fd', floors: 6 },
-    library: { emoji: 'LIBRARY', baseColor: '#d4a574', floors: 2 },
-    museum: { emoji: 'MUSEUM', baseColor: '#e2e8f0', floors: 2 },
-    default: { emoji: 'BUILD', baseColor: '#a5b4fc', floors: 2 }
+    house: { emoji: '🏠', label: 'House', baseColor: '#4ade80', floors: 2 },
+    shop: { emoji: '🏪', label: 'Shop', baseColor: '#fbbf24', floors: 1 },
+    factory: { emoji: '🏭', label: 'Factory', baseColor: '#9ca3af', floors: 2 },
+    castle: { emoji: '🏰', label: 'Castle', baseColor: '#a78bfa', floors: 4 },
+    tower: { emoji: '🗼', label: 'Tower', baseColor: '#60a5fa', floors: 5 },
+    church: { emoji: '⛪', label: 'Church', baseColor: '#f9fafb', floors: 3 },
+    stadium: { emoji: '🏟️', label: 'Stadium', baseColor: '#34d399', floors: 2 },
+    hospital: { emoji: '🏥', label: 'Hospital', baseColor: '#fca5a5', floors: 3 },
+    school: { emoji: '🏫', label: 'School', baseColor: '#fde68a', floors: 2 },
+    restaurant: { emoji: '🍽️', label: 'Restaurant', baseColor: '#fb923c', floors: 1 },
+    hotel: { emoji: '🏨', label: 'Hotel', baseColor: '#c084fc', floors: 4 },
+    park: { emoji: '🌳', label: 'Park', baseColor: '#86efac', floors: 0 },
+    fountain: { emoji: '⛲', label: 'Fountain', baseColor: '#67e8f9', floors: 0 },
+    skyscraper: { emoji: '🏙️', label: 'Skyscraper', baseColor: '#93c5fd', floors: 6 },
+    library: { emoji: '📚', label: 'Library', baseColor: '#d4a574', floors: 2 },
+    museum: { emoji: '🖼️', label: 'Museum', baseColor: '#e2e8f0', floors: 2 },
+    default: { emoji: '🏗️', label: 'Build', baseColor: '#a5b4fc', floors: 2 }
   }
 
   const state = {
@@ -59,7 +59,10 @@ try {
     dayTime: 0,
     toastText: '',
     toastTimeout: null,
-    buildBusy: false
+    buildBusy: false,
+    selectedBuildingId: null,
+    weatherParticles: [],
+    npcs: []
   }
 
   const app = document.getElementById('app')
@@ -69,6 +72,10 @@ try {
   let weatherCtx = null
   let animationStarted = false
   let realtimeChannel = null
+  let resizeBound = false
+  let animationFrame = null
+  let weatherTimer = null
+  let dayTimer = null
 
   function esc(value) {
     return String(value || '')
@@ -127,6 +134,14 @@ try {
     }
   }
 
+  function screenToWorld(x, y) {
+    if (!canvas) return { x: 0, y: 0 }
+    return {
+      x: (x - canvas.width / 2) / state.camera.zoom - state.camera.x,
+      y: (y - canvas.height / 2) / state.camera.zoom - state.camera.y
+    }
+  }
+
   function parseDescription(text) {
     const lower = String(text || '').toLowerCase()
     let buildingType = 'default'
@@ -152,6 +167,7 @@ try {
       else if (/book|read|library/i.test(lower)) buildingType = 'library'
       else if (/art|exhibit|gallery|museum/i.test(lower)) buildingType = 'museum'
       else if (/tower/i.test(lower)) buildingType = 'tower'
+      else if (/house|home|cottage|villa/i.test(lower)) buildingType = 'house'
     }
 
     let floors = BUILDING_TYPES[buildingType]?.floors || 2
@@ -170,10 +186,19 @@ try {
       }
     }
 
+    const style = /medieval/.test(lower)
+      ? 'medieval'
+      : /futuristic|neon|cyber/.test(lower)
+        ? 'futuristic'
+        : /rustic|wood|farm/.test(lower)
+          ? 'rustic'
+          : 'modern'
+
     return {
       building_type: buildingType,
       floors,
       color,
+      style,
       description: text
     }
   }
@@ -237,6 +262,7 @@ try {
 
     const { error } = await supabase.from(TABLES.buildings).insert(payload)
     if (error) throw error
+    window.WorldAudio?.resume?.()
     window.WorldAudio?.playConstruction?.()
     toast('Building added to the world.')
   }
@@ -251,6 +277,38 @@ try {
     }
     const { error } = await supabase.from(TABLES.chat).insert(payload)
     if (error) throw error
+    window.WorldAudio?.resume?.()
+    window.WorldAudio?.playChatBlip?.()
+  }
+
+  async function signOut() {
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch (error) {
+      console.error('Sign out error:', error?.message)
+    }
+    state.session = null
+    state.user = null
+    state.entered = false
+    state.playerName = ''
+    state.selectedBuildingId = null
+    renderUI()
+    if (window.__worldBuilderShowAuthOverlay) {
+      await window.__worldBuilderShowAuthOverlay()
+      const { data: { session } } = await supabase.auth.getSession()
+      await bootFromSession(session)
+    }
+  }
+
+  function getLeaderboard() {
+    const counts = new Map()
+    state.buildings.forEach(building => {
+      const name = building.player_name || 'Builder'
+      counts.set(name, (counts.get(name) || 0) + 1)
+    })
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
   }
 
   function renderTopbar() {
@@ -261,6 +319,7 @@ try {
           <span class="stat-badge builds"><i class="fa-solid fa-city"></i>${state.buildings.length} builds</span>
           <span class="stat-badge weather"><i class="fa-solid ${WEATHER_ICONS[state.weather] || 'fa-cloud'}"></i>${state.weather}</span>
           <span class="stat-badge happy"><i class="fa-solid fa-user"></i>${esc(state.playerName || 'Builder')}</span>
+          <button class="topbar-btn" id="wb-logout-btn"><i class="fa-solid fa-right-from-bracket"></i><span>Log out</span></button>
         </div>
       </div>
     `
@@ -272,39 +331,24 @@ try {
         <div class="name-card">
           <div class="logo"><i class="fa-solid fa-cubes"></i></div>
           <h1>World Builder</h1>
-          <p>Your email and password login appears first when the app opens. After signing in, choose the builder name shown in the shared world.</p>
-          <input id="player-name" type="text" maxlength="24" placeholder="Enter your builder name" value="${esc(state.playerName)}">
-          <button id="enter-world">Enter World</button>
+          <p>Your email and password login appears first when the app opens. After signing in, choose the builder name other players will see in the world and start creating.</p>
+          <form id="name-form">
+            <input id="player-name-input" maxlength="24" placeholder="Choose your builder name" value="${esc(state.playerName || state.user?.email?.split('@')[0] || '')}">
+            <button type="submit">Enter the world</button>
+          </form>
         </div>
-      </div>
-    `
-  }
-
-  function renderBuildPanel() {
-    return `
-      <div class="build-panel">
-        <div class="build-row">
-          <input id="build-input" class="build-input" type="text" placeholder="Describe a building, like tall red castle with a moat" ${state.buildBusy ? 'disabled' : ''}>
-          <button id="build-btn" class="build-btn" ${state.buildBusy ? 'disabled' : ''}><i class="fa-solid fa-hammer"></i>${state.buildBusy ? 'Building...' : 'Build'}</button>
-        </div>
-        <div class="build-hint">Examples: futuristic glass skyscraper, tiny rustic bakery, giant emerald stadium</div>
       </div>
     `
   }
 
   function renderDrawer() {
-    const leaderboard = Object.entries(state.buildings.reduce((acc, building) => {
-      const key = building.player_name || 'Builder'
-      acc[key] = (acc[key] || 0) + 1
-      return acc
-    }, {})).sort((a, b) => b[1] - a[1])
-
+    const leaderboard = getLeaderboard()
     return `
-      <button class="drawer-toggle" id="drawer-toggle"><i class="fa-solid fa-bars"></i></button>
+      <button class="drawer-toggle" id="drawer-toggle" aria-label="Open drawer"><i class="fa-solid fa-bars"></i></button>
       <aside class="side-drawer ${state.drawerOpen ? 'open' : ''}">
         <div class="drawer-header">
           <h2>City Feed</h2>
-          <button class="drawer-close" id="drawer-close"><i class="fa-solid fa-xmark"></i></button>
+          <button class="drawer-close" id="drawer-close" aria-label="Close drawer"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="drawer-body">
           <section class="drawer-section">
@@ -315,186 +359,394 @@ try {
                 <div class="lb-name">${esc(name)}</div>
                 <div class="lb-count">${count}</div>
               </div>
-            `).join('') : '<div class="building-log-item">No builders yet.</div>'}
+            `).join('') : '<div class="building-log-item"><div class="bl-desc">No builders yet.</div></div>'}
           </section>
 
           <section class="drawer-section">
-            <h3>Recent Builds</h3>
-            ${state.buildings.slice().reverse().slice(0, 12).map(building => `
-              <div class="building-log-item">
-                <div class="bl-name">${esc(building.player_name || 'Builder')} built a ${esc(building.building_type || 'building')}</div>
-                <div class="bl-desc">${esc(building.description || '')}</div>
-                <div class="bl-time">${fmtTime(building.created_at)}</div>
-              </div>
-            `).join('') || '<div class="building-log-item">No buildings yet.</div>'}
+            <h3>Building Log</h3>
+            ${state.buildings.slice().reverse().slice(0, 12).map(building => {
+              const meta = BUILDING_TYPES[building.building_type] || BUILDING_TYPES.default
+              return `
+                <div class="building-log-item">
+                  <div class="bl-name">${meta.emoji} ${esc(meta.label)}</div>
+                  <div class="bl-desc">${esc(building.description || 'A new structure was added.')}</div>
+                  <div class="bl-time">${esc(building.player_name || 'Builder')} · ${fmtTime(building.created_at)}</div>
+                </div>
+              `
+            }).join('') || '<div class="building-log-item"><div class="bl-desc">Nothing built yet. Be the first.</div></div>'}
           </section>
 
           <section class="drawer-section chat-section">
-            <h3>Chat</h3>
+            <h3>Live Chat</h3>
             <div class="chat-messages" id="chat-messages">
               ${state.chatMessages.map(msg => `
                 <div class="chat-msg">
                   <div class="cm-name">${esc(msg.player_name || 'Builder')}</div>
                   <div class="cm-text">${esc(msg.message || '')}</div>
                 </div>
-              `).join('') || '<div class="chat-msg"><div class="cm-text">No messages yet.</div></div>'}
+              `).join('') || '<div class="chat-msg"><div class="cm-text">Say hello to the city.</div></div>'}
             </div>
-            <div class="chat-input-row">
-              <input id="chat-input" type="text" placeholder="Say something to the city">
-              <button id="chat-send">Send</button>
-            </div>
+            <form id="chat-form" class="chat-input-row">
+              <input id="chat-input" maxlength="140" placeholder="Message the city...">
+              <button type="submit">Send</button>
+            </form>
           </section>
         </div>
       </aside>
     `
   }
 
-  function renderToast() {
-    if (!state.toastText) return ''
-    return `<div style="position:absolute;left:50%;top:70px;transform:translateX(-50%);z-index:180;background:rgba(17,24,39,0.96);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:12px 16px;box-shadow:0 12px 32px rgba(0,0,0,0.35);">${esc(state.toastText)}</div>`
+  function renderBuildPanel() {
+    return `
+      <div class="build-panel">
+        <form id="build-form" class="build-row">
+          <input id="build-input" class="build-input" maxlength="160" placeholder="Describe a building, like: futuristic glass tower with neon lights" ${state.buildBusy ? 'disabled' : ''}>
+          <button class="build-btn" type="submit" ${state.buildBusy ? 'disabled' : ''}><i class="fa-solid fa-hammer"></i>${state.buildBusy ? 'Building...' : 'Build'}</button>
+        </form>
+        <div class="build-hint">Try: medieval castle, cozy bakery, giant stadium, snowy hospital, neon skyscraper.</div>
+      </div>
+    `
   }
 
-  function renderGame() {
+  function renderPopup() {
+    const building = state.buildings.find(item => item.id === state.selectedBuildingId)
+    if (!building || !canvas) return ''
+    const iso = isoToScreen(building.grid_x, building.grid_y)
+    const point = worldToCanvas(iso.x, iso.y - (building.floors || 1) * 18 - 60)
+    const meta = BUILDING_TYPES[building.building_type] || BUILDING_TYPES.default
+    return `
+      <div class="building-popup" style="left:${Math.max(12, Math.min(point.x - 110, window.innerWidth - 292))}px; top:${Math.max(70, point.y)}px;">
+        <button class="bp-close" id="popup-close"><i class="fa-solid fa-xmark"></i></button>
+        <div class="bp-type">${meta.emoji} ${esc(meta.label)}</div>
+        <div class="bp-desc">${esc(building.description || '')}</div>
+        <div class="bp-builder">Built by <strong>${esc(building.player_name || 'Builder')}</strong></div>
+        <div class="bp-time">${fmtTime(building.created_at)}</div>
+      </div>
+    `
+  }
+
+  function renderGameShell() {
     return `
       ${renderTopbar()}
+      <div class="daynight-overlay" id="daynight-overlay"></div>
       <canvas id="game-canvas" class="game-canvas"></canvas>
-      <canvas id="weather-canvas" class="game-canvas" style="pointer-events:none;"></canvas>
+      <canvas id="weather-canvas" class="weather-canvas"></canvas>
       ${renderDrawer()}
       ${renderBuildPanel()}
-      ${renderToast()}
+      ${renderPopup()}
+      ${state.toastText ? `<div class="toast">${esc(state.toastText)}</div>` : ''}
     `
   }
 
   function renderUI() {
-    if (!state.authReady || !state.user) {
+    if (!state.user) {
       app.innerHTML = ''
       return
     }
-
-    app.innerHTML = state.entered ? renderGame() : renderNameScreen() + renderToast()
-    bindEvents()
-    setupCanvasRefs()
-    if (state.entered) {
-      startAnimation()
-      drawScene()
+    if (!state.entered) {
+      app.innerHTML = renderNameScreen()
+      bindUIEvents()
+      return
     }
+    app.innerHTML = renderGameShell()
+    bindUIEvents()
+    ensureCanvasRefs()
+    syncOverlayState()
+    if (!animationStarted) startAnimation()
   }
 
-  function setupCanvasRefs() {
+  function ensureCanvasRefs() {
     canvas = document.getElementById('game-canvas')
     weatherCanvas = document.getElementById('weather-canvas')
     if (canvas) ctx = canvas.getContext('2d')
     if (weatherCanvas) weatherCtx = weatherCanvas.getContext('2d')
     resizeCanvases()
+    if (!resizeBound) {
+      resizeBound = true
+      window.addEventListener('resize', resizeCanvases)
+    }
+    setupCanvasInteractions()
   }
 
   function resizeCanvases() {
     if (canvas) {
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
+      canvas.width = window.innerWidth * Math.max(1, window.devicePixelRatio || 1)
+      canvas.height = window.innerHeight * Math.max(1, window.devicePixelRatio || 1)
+      canvas.style.width = `${window.innerWidth}px`
+      canvas.style.height = `${window.innerHeight}px`
+      ctx?.setTransform(1, 0, 0, 1, 0, 0)
+      ctx?.scale(Math.max(1, window.devicePixelRatio || 1), Math.max(1, window.devicePixelRatio || 1))
     }
     if (weatherCanvas) {
-      weatherCanvas.width = window.innerWidth
-      weatherCanvas.height = window.innerHeight
+      weatherCanvas.width = window.innerWidth * Math.max(1, window.devicePixelRatio || 1)
+      weatherCanvas.height = window.innerHeight * Math.max(1, window.devicePixelRatio || 1)
+      weatherCanvas.style.width = `${window.innerWidth}px`
+      weatherCanvas.style.height = `${window.innerHeight}px`
+      weatherCtx?.setTransform(1, 0, 0, 1, 0, 0)
+      weatherCtx?.scale(Math.max(1, window.devicePixelRatio || 1), Math.max(1, window.devicePixelRatio || 1))
     }
+  }
+
+  function syncOverlayState() {
+    const overlay = document.getElementById('daynight-overlay')
+    if (!overlay) return
+    const t = state.dayTime
+    const brightness = Math.sin(t * Math.PI * 2) * 0.5 + 0.5
+    const darkness = 1 - brightness
+    overlay.style.background = `linear-gradient(180deg, rgba(10,14,26,${0.08 + darkness * 0.28}), rgba(10,14,26,${0.02 + darkness * 0.46}))`
+    window.WorldAudio?.setWeather?.(state.weather)
+    window.WorldAudio?.setDayPhase?.(brightness < 0.38 ? 'night' : 'day')
+  }
+
+  function initNPCs() {
+    if (state.npcs.length) return
+    for (let i = 0; i < 10; i++) {
+      state.npcs.push({
+        x: Math.random() * GRID_SIZE,
+        y: Math.random() * GRID_SIZE,
+        dx: Math.random() > 0.5 ? 1 : -1,
+        dy: Math.random() > 0.5 ? 1 : -1,
+        speed: 0.004 + Math.random() * 0.008,
+        type: i < 6 ? 'walker' : 'car',
+        color: i < 6 ? '#fbbf24' : '#22d3ee'
+      })
+    }
+  }
+
+  function initWeatherParticles() {
+    state.weatherParticles = Array.from({ length: 80 }, () => ({
+      x: Math.random() * window.innerWidth,
+      y: Math.random() * window.innerHeight,
+      size: 1 + Math.random() * 3,
+      speed: 1 + Math.random() * 2,
+      drift: -0.5 + Math.random()
+    }))
+  }
+
+  function updateWeatherParticles() {
+    if (!weatherCtx || !weatherCanvas) return
+    weatherCtx.clearRect(0, 0, window.innerWidth, window.innerHeight)
+    if (!state.weatherParticles.length) initWeatherParticles()
+    if (state.weather === 'sunny' || state.weather === 'cloudy') return
+
+    weatherCtx.save()
+    if (state.weather === 'rain') {
+      weatherCtx.strokeStyle = 'rgba(125, 211, 252, 0.55)'
+      weatherCtx.lineWidth = 1.2
+      state.weatherParticles.forEach(p => {
+        weatherCtx.beginPath()
+        weatherCtx.moveTo(p.x, p.y)
+        weatherCtx.lineTo(p.x + p.drift * 3, p.y + p.speed * 8)
+        weatherCtx.stroke()
+        p.x += p.drift * 1.2
+        p.y += p.speed * 3.2
+        if (p.y > window.innerHeight) {
+          p.y = -10
+          p.x = Math.random() * window.innerWidth
+        }
+      })
+    } else if (state.weather === 'snow') {
+      weatherCtx.fillStyle = 'rgba(255,255,255,0.85)'
+      state.weatherParticles.forEach(p => {
+        weatherCtx.beginPath()
+        weatherCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
+        weatherCtx.fill()
+        p.x += p.drift * 0.8
+        p.y += p.speed * 0.8
+        if (p.y > window.innerHeight) {
+          p.y = -10
+          p.x = Math.random() * window.innerWidth
+        }
+      })
+    } else if (state.weather === 'fog') {
+      state.weatherParticles.slice(0, 18).forEach((p, i) => {
+        const radius = 40 + (i % 4) * 22
+        const gradient = weatherCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius)
+        gradient.addColorStop(0, 'rgba(226,232,240,0.08)')
+        gradient.addColorStop(1, 'rgba(226,232,240,0)')
+        weatherCtx.fillStyle = gradient
+        weatherCtx.beginPath()
+        weatherCtx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+        weatherCtx.fill()
+        p.x += 0.18 + p.drift * 0.2
+        if (p.x > window.innerWidth + 60) p.x = -60
+      })
+    }
+    weatherCtx.restore()
   }
 
   function drawTile(gx, gy) {
     const iso = isoToScreen(gx, gy)
-    const pos = worldToCanvas(iso.x, iso.y)
+    const point = worldToCanvas(iso.x, iso.y)
     const halfW = (TILE_W / 2) * state.camera.zoom
     const halfH = (TILE_H / 2) * state.camera.zoom
-
     ctx.beginPath()
-    ctx.moveTo(pos.x, pos.y - halfH)
-    ctx.lineTo(pos.x + halfW, pos.y)
-    ctx.lineTo(pos.x, pos.y + halfH)
-    ctx.lineTo(pos.x - halfW, pos.y)
+    ctx.moveTo(point.x, point.y - halfH)
+    ctx.lineTo(point.x + halfW, point.y)
+    ctx.lineTo(point.x, point.y + halfH)
+    ctx.lineTo(point.x - halfW, point.y)
     ctx.closePath()
     ctx.fillStyle = 'rgba(255,255,255,0.035)'
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)'
     ctx.fill()
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
     ctx.stroke()
   }
 
   function drawBuilding(building) {
     const iso = isoToScreen(building.grid_x, building.grid_y)
-    const pos = worldToCanvas(iso.x, iso.y)
-    const floors = Number(building.floors || 2)
-    const baseColor = building.color || '#a5b4fc'
-    const width = 22 * state.camera.zoom
-    const depth = 22 * state.camera.zoom
-    const height = Math.max(18, floors * 14) * state.camera.zoom
+    const point = worldToCanvas(iso.x, iso.y)
+    const floors = Math.max(0, Number(building.floors) || 0)
+    const meta = BUILDING_TYPES[building.building_type] || BUILDING_TYPES.default
+    const width = 20 * state.camera.zoom
+    const depth = 20 * state.camera.zoom
+    const floorHeight = 16 * state.camera.zoom
+    const totalHeight = Math.max(floorHeight, floors * floorHeight)
+    const baseColor = building.color || meta.baseColor
+    const leftColor = shadeColor(baseColor, 0.78)
+    const rightColor = shadeColor(baseColor, 0.58)
+    const topColor = shadeColor(baseColor, 1.08)
 
-    ctx.fillStyle = shadeColor(baseColor, 0.75)
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.22)'
     ctx.beginPath()
-    ctx.moveTo(pos.x, pos.y - height)
-    ctx.lineTo(pos.x + width, pos.y - height / 2)
-    ctx.lineTo(pos.x + width, pos.y + depth / 2)
-    ctx.lineTo(pos.x, pos.y)
-    ctx.closePath()
+    ctx.ellipse(point.x, point.y + 10 * state.camera.zoom, width * 1.15, depth * 0.58, 0, 0, Math.PI * 2)
     ctx.fill()
 
-    ctx.fillStyle = shadeColor(baseColor, 0.58)
-    ctx.beginPath()
-    ctx.moveTo(pos.x, pos.y - height)
-    ctx.lineTo(pos.x - width, pos.y - height / 2)
-    ctx.lineTo(pos.x - width, pos.y + depth / 2)
-    ctx.lineTo(pos.x, pos.y)
-    ctx.closePath()
-    ctx.fill()
+    if (meta.label === 'Park') {
+      ctx.fillStyle = 'rgba(34,197,94,0.75)'
+      ctx.beginPath()
+      ctx.moveTo(point.x, point.y - depth)
+      ctx.lineTo(point.x + width, point.y)
+      ctx.lineTo(point.x, point.y + depth)
+      ctx.lineTo(point.x - width, point.y)
+      ctx.closePath()
+      ctx.fill()
+      ctx.fillStyle = '#166534'
+      ctx.beginPath()
+      ctx.arc(point.x, point.y - 18 * state.camera.zoom, 12 * state.camera.zoom, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = '#92400e'
+      ctx.fillRect(point.x - 2 * state.camera.zoom, point.y - 10 * state.camera.zoom, 4 * state.camera.zoom, 14 * state.camera.zoom)
+    } else if (meta.label === 'Fountain') {
+      ctx.fillStyle = '#60a5fa'
+      ctx.beginPath()
+      ctx.ellipse(point.x, point.y, width, depth * 0.8, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = '#dbeafe'
+      ctx.fillRect(point.x - 3 * state.camera.zoom, point.y - 20 * state.camera.zoom, 6 * state.camera.zoom, 20 * state.camera.zoom)
+      ctx.beginPath()
+      ctx.arc(point.x, point.y - 24 * state.camera.zoom, 6 * state.camera.zoom, 0, Math.PI * 2)
+      ctx.fill()
+    } else {
+      ctx.beginPath()
+      ctx.moveTo(point.x, point.y - totalHeight - depth)
+      ctx.lineTo(point.x + width, point.y - totalHeight)
+      ctx.lineTo(point.x, point.y - totalHeight + depth)
+      ctx.lineTo(point.x - width, point.y - totalHeight)
+      ctx.closePath()
+      ctx.fillStyle = topColor
+      ctx.fill()
 
-    ctx.fillStyle = shadeColor(baseColor, 1.08)
-    ctx.beginPath()
-    ctx.moveTo(pos.x, pos.y - height - depth / 2)
-    ctx.lineTo(pos.x + width, pos.y - height / 2)
-    ctx.lineTo(pos.x, pos.y)
-    ctx.lineTo(pos.x - width, pos.y - height / 2)
-    ctx.closePath()
-    ctx.fill()
+      ctx.beginPath()
+      ctx.moveTo(point.x - width, point.y - totalHeight)
+      ctx.lineTo(point.x, point.y - totalHeight + depth)
+      ctx.lineTo(point.x, point.y + depth)
+      ctx.lineTo(point.x - width, point.y)
+      ctx.closePath()
+      ctx.fillStyle = leftColor
+      ctx.fill()
 
-    ctx.fillStyle = 'rgba(255,255,255,0.9)'
-    ctx.font = `${Math.max(10, 11 * state.camera.zoom)}px Inter, sans-serif`
+      ctx.beginPath()
+      ctx.moveTo(point.x + width, point.y - totalHeight)
+      ctx.lineTo(point.x, point.y - totalHeight + depth)
+      ctx.lineTo(point.x, point.y + depth)
+      ctx.lineTo(point.x + width, point.y)
+      ctx.closePath()
+      ctx.fillStyle = rightColor
+      ctx.fill()
+
+      const windowRows = Math.max(1, Math.min(6, floors))
+      for (let i = 0; i < windowRows; i++) {
+        const wy = point.y - totalHeight + 8 * state.camera.zoom + i * 12 * state.camera.zoom
+        ctx.fillStyle = state.dayTime > 0.68 || state.dayTime < 0.22 ? 'rgba(251,191,36,0.9)' : 'rgba(224,231,255,0.55)'
+        ctx.fillRect(point.x - width * 0.68, wy, 5 * state.camera.zoom, 7 * state.camera.zoom)
+        ctx.fillRect(point.x + width * 0.32, wy, 5 * state.camera.zoom, 7 * state.camera.zoom)
+      }
+
+      if (/castle|church|tower/.test(building.building_type || '')) {
+        ctx.fillStyle = shadeColor(baseColor, 0.72)
+        ctx.beginPath()
+        ctx.moveTo(point.x, point.y - totalHeight - depth - 18 * state.camera.zoom)
+        ctx.lineTo(point.x + 8 * state.camera.zoom, point.y - totalHeight - depth + 4 * state.camera.zoom)
+        ctx.lineTo(point.x - 8 * state.camera.zoom, point.y - totalHeight - depth + 4 * state.camera.zoom)
+        ctx.closePath()
+        ctx.fill()
+      }
+    }
+
+    if (state.selectedBuildingId === building.id) {
+      ctx.strokeStyle = '#fbbf24'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(point.x, point.y - depth - totalHeight - 8 * state.camera.zoom)
+      ctx.lineTo(point.x + width + 8 * state.camera.zoom, point.y - totalHeight)
+      ctx.lineTo(point.x, point.y + depth + 8 * state.camera.zoom)
+      ctx.lineTo(point.x - width - 8 * state.camera.zoom, point.y - totalHeight)
+      ctx.closePath()
+      ctx.stroke()
+    }
+
+    ctx.font = `${Math.max(10, 11 * state.camera.zoom)}px Inter`
+    ctx.fillStyle = 'rgba(240,244,255,0.92)'
     ctx.textAlign = 'center'
-    ctx.fillText((building.building_type || 'build').toUpperCase(), pos.x, pos.y - height / 2)
+    ctx.fillText(meta.emoji, point.x, point.y - totalHeight - depth - 12 * state.camera.zoom)
+    ctx.restore()
   }
 
-  function drawWeatherOverlay() {
-    if (!weatherCtx || !weatherCanvas) return
-    weatherCtx.clearRect(0, 0, weatherCanvas.width, weatherCanvas.height)
-    if (state.weather === 'rain') {
-      weatherCtx.strokeStyle = 'rgba(120,180,255,0.35)'
-      for (let i = 0; i < 80; i++) {
-        const x = (i * 53 + Date.now() * 0.25) % weatherCanvas.width
-        const y = (i * 41 + Date.now() * 0.45) % weatherCanvas.height
-        weatherCtx.beginPath()
-        weatherCtx.moveTo(x, y)
-        weatherCtx.lineTo(x - 6, y + 14)
-        weatherCtx.stroke()
+  function updateNPCs() {
+    initNPCs()
+    state.npcs.forEach(npc => {
+      npc.x += npc.dx * npc.speed
+      npc.y += npc.dy * npc.speed
+      if (npc.x < 0 || npc.x > GRID_SIZE - 1) npc.dx *= -1
+      if (npc.y < 0 || npc.y > GRID_SIZE - 1) npc.dy *= -1
+    })
+  }
+
+  function drawNPCs() {
+    state.npcs.forEach(npc => {
+      const iso = isoToScreen(npc.x, npc.y)
+      const point = worldToCanvas(iso.x, iso.y)
+      ctx.save()
+      ctx.fillStyle = npc.color
+      if (npc.type === 'walker') {
+        ctx.beginPath()
+        ctx.arc(point.x, point.y - 8 * state.camera.zoom, 4 * state.camera.zoom, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.fillRect(point.x - 2 * state.camera.zoom, point.y - 4 * state.camera.zoom, 4 * state.camera.zoom, 10 * state.camera.zoom)
+      } else {
+        ctx.fillRect(point.x - 8 * state.camera.zoom, point.y - 4 * state.camera.zoom, 16 * state.camera.zoom, 8 * state.camera.zoom)
       }
-    } else if (state.weather === 'snow') {
-      weatherCtx.fillStyle = 'rgba(255,255,255,0.6)'
-      for (let i = 0; i < 60; i++) {
-        const x = (i * 67 + Date.now() * 0.08) % weatherCanvas.width
-        const y = (i * 59 + Date.now() * 0.12) % weatherCanvas.height
-        weatherCtx.beginPath()
-        weatherCtx.arc(x, y, 2, 0, Math.PI * 2)
-        weatherCtx.fill()
-      }
-    } else if (state.weather === 'fog') {
-      weatherCtx.fillStyle = 'rgba(220,230,255,0.08)'
-      weatherCtx.fillRect(0, 0, weatherCanvas.width, weatherCanvas.height)
-    }
+      ctx.restore()
+    })
   }
 
   function drawScene() {
     if (!ctx || !canvas) return
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height)
-    gradient.addColorStop(0, '#0b1220')
-    gradient.addColorStop(1, '#111827')
-    ctx.fillStyle = gradient
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight)
+
+    const sky = ctx.createLinearGradient(0, 0, 0, window.innerHeight)
+    const daylight = Math.sin(state.dayTime * Math.PI * 2) * 0.5 + 0.5
+    if (daylight < 0.35) {
+      sky.addColorStop(0, '#0b1120')
+      sky.addColorStop(1, '#111827')
+    } else {
+      sky.addColorStop(0, '#10203d')
+      sky.addColorStop(1, '#1e293b')
+    }
+    ctx.fillStyle = sky
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight)
 
     for (let gx = 0; gx < GRID_SIZE; gx++) {
       for (let gy = 0; gy < GRID_SIZE; gy++) {
@@ -502,167 +754,220 @@ try {
       }
     }
 
-    state.buildings.slice().sort((a, b) => (a.grid_x + a.grid_y) - (b.grid_x + b.grid_y)).forEach(drawBuilding)
-    drawWeatherOverlay()
+    const sortedBuildings = [...state.buildings].sort((a, b) => (a.grid_x + a.grid_y) - (b.grid_x + b.grid_y))
+    sortedBuildings.forEach(drawBuilding)
+    updateNPCs()
+    drawNPCs()
+    updateWeatherParticles()
   }
 
   function animate() {
-    if (!state.entered) return
-    state.dayTime = (Date.now() % DAY_CYCLE_MS) / DAY_CYCLE_MS
-    window.WorldAudio?.setDayPhase?.(state.dayTime > 0.5 ? 'night' : 'day')
     drawScene()
-    requestAnimationFrame(animate)
+    animationFrame = requestAnimationFrame(animate)
   }
 
   function startAnimation() {
     if (animationStarted) return
     animationStarted = true
-    requestAnimationFrame(animate)
+    initWeatherParticles()
+    animate()
   }
 
-  function randomizeWeather() {
-    state.weather = WEATHER_TYPES[Math.floor(Math.random() * WEATHER_TYPES.length)]
-    window.WorldAudio?.setWeather?.(state.weather)
+  function cycleWeather() {
+    const next = WEATHER_TYPES[(WEATHER_TYPES.indexOf(state.weather) + 1) % WEATHER_TYPES.length]
+    state.weather = next
+    initWeatherParticles()
+    syncOverlayState()
+    renderUI()
   }
 
-  function bindEvents() {
-    document.getElementById('enter-world')?.addEventListener('click', () => {
-      const input = document.getElementById('player-name')
+  function startWorldTimers() {
+    if (!weatherTimer) {
+      weatherTimer = setInterval(() => {
+        if (!state.entered) return
+        cycleWeather()
+      }, 30000)
+    }
+    if (!dayTimer) {
+      dayTimer = setInterval(() => {
+        if (!state.entered) return
+        state.dayTime = (Date.now() % DAY_CYCLE_MS) / DAY_CYCLE_MS
+        syncOverlayState()
+      }, 1000)
+    }
+  }
+
+  function getPointerPos(event) {
+    const rect = canvas.getBoundingClientRect()
+    const clientX = event.touches ? event.touches[0].clientX : event.clientX
+    const clientY = event.touches ? event.touches[0].clientY : event.clientY
+    return { x: clientX - rect.left, y: clientY - rect.top }
+  }
+
+  function findBuildingAt(px, py) {
+    let found = null
+    let bestDistance = Infinity
+    state.buildings.forEach(building => {
+      const iso = isoToScreen(building.grid_x, building.grid_y)
+      const point = worldToCanvas(iso.x, iso.y)
+      const distance = Math.hypot(point.x - px, point.y - py)
+      if (distance < 34 * state.camera.zoom && distance < bestDistance) {
+        bestDistance = distance
+        found = building
+      }
+    })
+    return found
+  }
+
+  function setupCanvasInteractions() {
+    if (!canvas || canvas.dataset.bound === 'true') return
+    canvas.dataset.bound = 'true'
+
+    let dragging = false
+    let last = { x: 0, y: 0 }
+
+    const startDrag = event => {
+      dragging = true
+      const pos = getPointerPos(event)
+      last = pos
+      window.WorldAudio?.resume?.()
+    }
+
+    const moveDrag = event => {
+      if (!dragging) return
+      const pos = getPointerPos(event)
+      state.camera.x += (pos.x - last.x) / state.camera.zoom
+      state.camera.y += (pos.y - last.y) / state.camera.zoom
+      last = pos
+    }
+
+    const endDrag = event => {
+      if (!dragging) return
+      const pos = getPointerPos(event)
+      const moved = Math.hypot(pos.x - last.x, pos.y - last.y)
+      dragging = false
+      if (moved < 8) {
+        const found = findBuildingAt(pos.x, pos.y)
+        state.selectedBuildingId = found?.id || null
+        renderUI()
+      }
+    }
+
+    canvas.addEventListener('pointerdown', startDrag)
+    canvas.addEventListener('pointermove', moveDrag)
+    canvas.addEventListener('pointerup', endDrag)
+    canvas.addEventListener('pointerleave', () => { dragging = false })
+    canvas.addEventListener('wheel', event => {
+      event.preventDefault()
+      const delta = event.deltaY > 0 ? -0.08 : 0.08
+      state.camera.zoom = Math.max(0.55, Math.min(1.8, state.camera.zoom + delta))
+    }, { passive: false })
+  }
+
+  function bindUIEvents() {
+    document.getElementById('wb-logout-btn')?.addEventListener('click', signOut)
+    document.getElementById('drawer-toggle')?.addEventListener('click', () => {
+      state.drawerOpen = true
+      renderUI()
+    })
+    document.getElementById('drawer-close')?.addEventListener('click', () => {
+      state.drawerOpen = false
+      renderUI()
+    })
+    document.getElementById('popup-close')?.addEventListener('click', () => {
+      state.selectedBuildingId = null
+      renderUI()
+    })
+    document.getElementById('name-form')?.addEventListener('submit', event => {
+      event.preventDefault()
+      const input = document.getElementById('player-name-input')
       const nextName = String(input?.value || '').trim() || state.user?.email?.split('@')[0] || 'Builder'
       state.playerName = nextName.slice(0, 24)
       state.entered = true
-      window.WorldAudio?.resume?.()
       renderUI()
+      startWorldTimers()
+      window.WorldAudio?.resume?.()
     })
-
-    document.getElementById('player-name')?.addEventListener('keydown', event => {
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        document.getElementById('enter-world')?.click()
-      }
-    })
-
-    document.getElementById('build-btn')?.addEventListener('click', async () => {
+    document.getElementById('build-form')?.addEventListener('submit', async event => {
+      event.preventDefault()
       const input = document.getElementById('build-input')
-      const value = String(input?.value || '').trim()
-      if (!value || state.buildBusy) return
+      const text = String(input?.value || '').trim()
+      if (!text || state.buildBusy) return
       state.buildBusy = true
       renderUI()
       try {
-        await placeBuilding(value)
+        await placeBuilding(text)
         if (input) input.value = ''
-        await loadBuildings()
       } catch (error) {
         console.error('Build error:', error?.message)
-        toast(error?.message || 'Could not place building.')
+        toast(error?.message || 'Could not build right now.')
       } finally {
         state.buildBusy = false
         renderUI()
       }
     })
-
-    document.getElementById('build-input')?.addEventListener('keydown', event => {
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        document.getElementById('build-btn')?.click()
-      }
-    })
-
-    document.getElementById('drawer-toggle')?.addEventListener('click', () => {
-      state.drawerOpen = true
-      window.WorldAudio?.playClick?.()
-      renderUI()
-    })
-
-    document.getElementById('drawer-close')?.addEventListener('click', () => {
-      state.drawerOpen = false
-      window.WorldAudio?.playClick?.()
-      renderUI()
-    })
-
-    document.getElementById('chat-send')?.addEventListener('click', async () => {
+    document.getElementById('chat-form')?.addEventListener('submit', async event => {
+      event.preventDefault()
       const input = document.getElementById('chat-input')
-      const value = String(input?.value || '').trim()
-      if (!value) return
+      const text = String(input?.value || '').trim()
+      if (!text) return
       try {
-        await sendChatMessage(value)
-        if (input) input.value = ''
-        window.WorldAudio?.playChatBlip?.()
-        await loadChatMessages()
-        renderUI()
+        await sendChatMessage(text)
+        input.value = ''
       } catch (error) {
         console.error('Chat error:', error?.message)
         toast(error?.message || 'Could not send chat message.')
       }
     })
-
-    document.getElementById('chat-input')?.addEventListener('keydown', event => {
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        document.getElementById('chat-send')?.click()
-      }
-    })
-
-    window.addEventListener('resize', resizeCanvases)
   }
 
   function setupRealtime() {
     if (realtimeChannel) return
     realtimeChannel = supabase.channel('world-builder-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.buildings }, async () => {
+        const before = state.buildings.length
         await loadBuildings()
+        if (state.buildings.length > before) window.WorldAudio?.playConstruction?.()
         renderUI()
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.chat }, async () => {
+        const before = state.chatMessages.length
         await loadChatMessages()
-        window.WorldAudio?.playChatBlip?.()
+        if (state.chatMessages.length > before) window.WorldAudio?.playChatBlip?.()
         renderUI()
       })
       .subscribe()
   }
 
-  async function handleSession(session) {
+  async function bootFromSession(session) {
     state.session = session || null
     state.user = session?.user || null
     state.authReady = true
-
     if (!state.user) {
       state.entered = false
       state.playerName = ''
+      state.selectedBuildingId = null
       renderUI()
       return
     }
-
-    if (!state.playerName) {
-      state.playerName = state.user.email?.split('@')[0] || 'Builder'
-    }
-
+    state.playerName = state.playerName || state.user.email?.split('@')[0] || 'Builder'
     await loadAllData()
-    setupRealtime()
-    randomizeWeather()
     renderUI()
+    setupRealtime()
   }
 
   async function init() {
-    try {
-      app.innerHTML = ''
-      const { data: { session } } = await supabase.auth.getSession()
-      await handleSession(session)
-      supabase.auth.onAuthStateChange(async (_event, nextSession) => {
-        try {
-          await handleSession(nextSession)
-        } catch (error) {
-          console.error('Auth state error:', error?.message)
-        }
-      })
-    } catch (error) {
-      console.error('Init error:', error?.message, error?.stack)
-      state.authReady = true
-      renderUI()
-    }
+    const { data: { session } } = await supabase.auth.getSession()
+    await bootFromSession(session)
+    supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+      await bootFromSession(nextSession)
+    })
   }
 
-  init()
+  init().catch(error => {
+    console.error('Init error:', error?.message, error?.stack)
+    app.innerHTML = '<div class="name-screen"><div class="name-card"><h1>World Builder</h1><p>Something went wrong while loading the city.</p></div></div>'
+  })
 } catch (error) {
   console.error('World Builder fatal error:', error?.message, error?.stack)
 }

@@ -29,8 +29,6 @@ body {
   -webkit-user-select: none;
 }
 #app { width: 100%; height: 100%; position: relative; overflow: hidden; }
-
-/* ===== INPUT FOCUS FIX ===== */
 input, textarea, select,
 .build-input,
 .chat-input-row input,
@@ -40,8 +38,6 @@ input, textarea, select,
   touch-action: auto !important;
   -webkit-touch-callout: default !important;
 }
-
-/* ===== NAME SCREEN ===== */
 .name-screen {
   position: absolute; inset: 0; z-index: 200;
   display: grid; place-items: center;
@@ -86,8 +82,6 @@ input, textarea, select,
   box-shadow: 0 8px 24px rgba(99,102,241,0.3);
 }
 .name-card button:hover { transform: translateY(-1px); }
-
-/* ===== TOP BAR ===== */
 .topbar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 100;
   padding: 10px 14px;
@@ -103,7 +97,7 @@ input, textarea, select,
   background: linear-gradient(135deg, var(--accent), var(--cyan));
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }
-.topbar .stats { display: flex; gap: 8px; margin-left: auto; flex-wrap: nowrap; }
+.topbar .stats { display: flex; gap: 8px; margin-left: auto; flex-wrap: nowrap; align-items: center; }
 .stat-badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 5px 10px; border-radius: 999px;
@@ -113,20 +107,24 @@ input, textarea, select,
   white-space: nowrap;
 }
 .stat-badge i { font-size: 0.7rem; }
-.stat-badge.pop i { color: var(--green); }
 .stat-badge.happy i { color: var(--yellow); }
 .stat-badge.weather i { color: var(--cyan); }
 .stat-badge.builds i { color: var(--pink); }
-
-/* ===== CANVAS ===== */
-.game-canvas {
+.topbar-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,0.06);
+  color: var(--text); cursor: pointer; font-weight: 700;
+}
+.game-canvas,
+.weather-canvas {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  cursor: grab;
 }
+.game-canvas { cursor: grab; }
 .game-canvas:active { cursor: grabbing; }
-
-/* ===== BOTTOM BUILD PANEL ===== */
+.weather-canvas { pointer-events: none; z-index: 15; }
 .build-panel {
   position: absolute; bottom: 0; left: 0; right: 0; z-index: 100;
   padding: 12px 14px;
@@ -162,8 +160,6 @@ input, textarea, select,
   margin-top: 6px; font-size: 0.72rem; color: var(--muted);
   text-align: center;
 }
-
-/* ===== SIDE DRAWER ===== */
 .drawer-toggle {
   position: absolute; top: 56px; right: 10px; z-index: 101;
   width: 40px; height: 40px;
@@ -222,7 +218,6 @@ input, textarea, select,
 .lb-rank.normal { background: rgba(255,255,255,0.06); color: var(--muted); }
 .lb-name { flex: 1; font-weight: 700; font-size: 0.85rem; }
 .lb-count { color: var(--accent); font-weight: 800; font-size: 0.85rem; }
-
 .building-log-item {
   padding: 10px 12px; border-radius: 12px;
   background: rgba(255,255,255,0.03);
@@ -232,8 +227,6 @@ input, textarea, select,
 .building-log-item .bl-name { font-weight: 700; font-size: 0.8rem; color: var(--accent); }
 .building-log-item .bl-desc { color: var(--muted); font-size: 0.78rem; margin-top: 3px; line-height: 1.4; }
 .building-log-item .bl-time { color: rgba(255,255,255,0.3); font-size: 0.68rem; margin-top: 4px; }
-
-/* ===== CHAT ===== */
 .chat-section { border-top: 1px solid var(--line); padding-top: 12px; }
 .chat-messages {
   max-height: 180px; overflow-y: auto;
@@ -263,8 +256,6 @@ input, textarea, select,
   border-radius: 10px; color: white;
   font-weight: 700; cursor: pointer;
 }
-
-/* ===== BUILDING POPUP ===== */
 .building-popup {
   position: absolute; z-index: 120;
   background: var(--panel);
@@ -296,47 +287,28 @@ input, textarea, select,
 .building-popup .bp-time {
   font-size: 0.68rem; color: rgba(255,255,255,0.3); margin-top: 4px;
 }
-
-/* ===== DAY/NIGHT OVERLAY ===== */
 .daynight-overlay {
   position: absolute; inset: 0;
   pointer-events: none; z-index: 10;
   transition: background 2s ease;
 }
-
-/* ===== WEATHER OVERLAY ===== */
-.weather-overlay {
-  position: absolute; inset: 0;
-  pointer-events: none; z-index: 11;
-  overflow: hidden;
-}
-.weather-overlay canvas {
-  width: 100%; height: 100%;
-}
-
-/* ===== TOAST ===== */
 .toast {
   position: absolute;
-  top: 58px; left: 50%;
-  transform: translateX(-50%);
-  z-index: 300;
-  padding: 10px 20px;
+  left: 50%; top: 76px; transform: translateX(-50%);
+  z-index: 180;
+  background: rgba(17,24,39,0.94);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text);
+  padding: 10px 14px;
   border-radius: 12px;
-  background: var(--accent);
-  color: white;
-  font-weight: 700;
-  font-size: 0.85rem;
-  box-shadow: 0 8px 24px rgba(99,102,241,0.3);
-  animation: toastIn 0.3s ease;
-  white-space: nowrap;
+  box-shadow: var(--shadow);
 }
-@keyframes toastIn {
-  from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+@media (max-width: 900px) {
+  .topbar { flex-wrap: wrap; }
+  .topbar .stats { flex-wrap: wrap; justify-content: flex-end; }
 }
-
-/* ===== AUDIO MUTE BTN ===== */
-#audio-mute-btn:hover {
-  color: var(--cyan) !important;
-  border-color: rgba(34,211,238,0.4) !important;
+@media (max-width: 640px) {
+  .topbar .stats { gap: 6px; }
+  .stat-badge, .topbar-btn { font-size: 0.66rem; }
+  .topbar-btn span { display: none; }
 }
