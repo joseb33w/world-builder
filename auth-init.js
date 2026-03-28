@@ -1,21 +1,22 @@
-/**
- * auth-init.js -- Email/password authentication for World Builder
- *
- * Runs BEFORE app.js (top-level await in ES module).
- * If no session exists, shows a full-screen auth overlay.
- * Once authenticated, the overlay is removed and app.js loads.
- *
- * Supabase persists sessions in localStorage, so when app.js
- * creates its own client with the same URL/key, it picks up
- * the session automatically.
- */
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm'
 
 const SUPABASE_URL = 'https://xhhmxabftbyxrirvvihn.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_NZHoIxqqpSvVBP8MrLHCYA_gmg1AbN-'
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+const STORAGE_KEY = 'sb-xhhmxabftbyxrirvvihn-auth-token'
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: false,
+    detectSessionInUrl: true,
+    storageKey: STORAGE_KEY
+  }
+})
+
+window.__worldBuilderSupabase = supabase
 
 try {
+  await clearInvalidRefreshState()
   const { data: { session } } = await supabase.auth.getSession()
   if (session) {
     console.log('[auth-init] Existing session found, uid:', session.user?.id)
@@ -25,6 +26,38 @@ try {
   }
 } catch (e) {
   console.error('[auth-init] Auth bootstrap error:', e.message)
+  await clearInvalidRefreshState()
+  await showAuthOverlay()
+}
+
+async function clearInvalidRefreshState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    const hasRefreshToken = !!parsed?.refresh_token
+    if (!hasRefreshToken) {
+      localStorage.removeItem(STORAGE_KEY)
+      return
+    }
+  } catch (error) {
+    localStorage.removeItem(STORAGE_KEY)
+  }
+
+  try {
+    const { error } = await supabase.auth.getSession()
+    if (error && /refresh_token_not_found|invalid refresh token|refresh token/i.test(String(error.message || error.code || ''))) {
+      localStorage.removeItem(STORAGE_KEY)
+      await supabase.auth.signOut({ scope: 'local' })
+    }
+  } catch (error) {
+    if (/refresh_token_not_found|invalid refresh token|refresh token/i.test(String(error?.message || error?.code || ''))) {
+      localStorage.removeItem(STORAGE_KEY)
+      try {
+        await supabase.auth.signOut({ scope: 'local' })
+      } catch (_) {}
+    }
+  }
 }
 
 function friendlyError(msg) {
@@ -39,7 +72,6 @@ function friendlyError(msg) {
 
 function showAuthOverlay() {
   return new Promise((resolve) => {
-    // Inject scoped styles
     const styleEl = document.createElement('style')
     styleEl.id = 'wb-auth-style'
     styleEl.textContent = `
@@ -137,7 +169,7 @@ function showAuthOverlay() {
     `
     document.head.appendChild(styleEl)
 
-    let mode = 'signin' // 'signin' | 'signup' | 'check-email'
+    let mode = 'signin'
     let pendingEmail = ''
     let busy = false
 
@@ -226,13 +258,12 @@ function showAuthOverlay() {
 
             if (error) {
               if (/already been registered|user already registered/i.test(error.message)) {
-                // Try signing in instead
                 const signIn = await supabase.auth.signInWithPassword({ email, password })
                 if (signIn.error) {
                   errorEl.textContent = friendlyError(signIn.error.message)
                   return
                 }
-                console.log('[auth-init] Signed in (existing user), uid:', signIn.data.user?.id)
+                console.log('[auth-init] Signed in, uid:', signIn.data.user?.id)
                 cleanup()
                 resolve()
                 return
@@ -248,19 +279,18 @@ function showAuthOverlay() {
               return
             }
 
-            // Email confirmation needed
             pendingEmail = email
             mode = 'check-email'
             renderAuthUI()
             return
           }
 
-          // Sign in
           const { data, error } = await supabase.auth.signInWithPassword({ email, password })
           if (error) {
             errorEl.textContent = friendlyError(error.message)
             return
           }
+
           console.log('[auth-init] Signed in, uid:', data.user?.id)
           cleanup()
           resolve()
@@ -271,17 +301,12 @@ function showAuthOverlay() {
           const btn = document.getElementById('wb-submit')
           if (btn) {
             btn.disabled = false
-            btn.textContent = isSignup ? 'Create account' : 'Sign in'
+            btn.textContent = mode === 'signup' ? 'Create account' : 'Sign in'
           }
         }
       })
     }
 
-    // Mount once DOM is ready
-    if (document.body) {
-      renderAuthUI()
-    } else {
-      document.addEventListener('DOMContentLoaded', () => renderAuthUI())
-    }
+    renderAuthUI()
   })
 }
