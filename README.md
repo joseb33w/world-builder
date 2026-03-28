@@ -99,4 +99,4 @@ All audio is **procedurally generated** using the Web Audio API — no external 
 
 ## 📄 License
 
-MIT — build whatever you want.
+MIT — build whatever you want. This is like a mini version of Minecraft what I'm trying to build.
