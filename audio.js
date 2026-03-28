@@ -1,17 +1,4 @@
-/**
- * audio.js — Procedural audio system for World Builder
- *
- * Uses Web Audio API to generate all sounds procedurally (no external files).
- * - City ambience (gentle noise + tone drones)
- * - Construction sounds (when building is placed)
- * - Day/night ambient music shift
- * - Weather audio (rain, wind)
- * - Mute/unmute toggle
- *
- * Exposes window.WorldAudio for optional integration with app.js.
- * Also hooks into DOM events independently.
- */
-;(function() {
+;(function () {
   'use strict'
 
   let audioCtx = null
@@ -19,487 +6,355 @@
   let ambienceGain = null
   let musicGain = null
   let sfxGain = null
-  let muted = true // Start muted, user opts in
+  let muted = true
   let initialized = false
   let ambienceNodes = []
-  let musicInterval = null
+  let musicNodes = []
+  let weatherNodes = []
+  let toggleBtn = null
+  let currentWeather = 'sunny'
   let currentDayPhase = 'day'
 
-  // Lazy-init on first user interaction
   function ensureContext() {
     if (audioCtx) return true
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)()
       masterGain = audioCtx.createGain()
-      masterGain.gain.value = muted ? 0 : 0.5
+      masterGain.gain.value = muted ? 0 : 0.45
       masterGain.connect(audioCtx.destination)
 
       ambienceGain = audioCtx.createGain()
-      ambienceGain.gain.value = 0.3
+      ambienceGain.gain.value = 0.28
       ambienceGain.connect(masterGain)
 
       musicGain = audioCtx.createGain()
-      musicGain.gain.value = 0.15
+      musicGain.gain.value = 0.16
       musicGain.connect(masterGain)
 
       sfxGain = audioCtx.createGain()
-      sfxGain.gain.value = 0.6
+      sfxGain.gain.value = 0.65
       sfxGain.connect(masterGain)
 
       initialized = true
+      startAmbience()
+      updateMusic()
+      setWeather(currentWeather)
       return true
-    } catch(e) {
-      console.warn('[audio] Web Audio API not available:', e.message)
+    } catch (error) {
+      console.warn('[audio] Web Audio unavailable:', error?.message)
       return false
     }
   }
 
-  function resumeCtx() {
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(() => {})
+  async function resume() {
+    if (!ensureContext()) return false
+    if (audioCtx.state === 'suspended') {
+      try {
+        await audioCtx.resume()
+      } catch (_) {}
+    }
+    return true
+  }
+
+  function setMuted(nextMuted) {
+    muted = !!nextMuted
+    if (ensureContext()) {
+      const now = audioCtx.currentTime
+      masterGain.gain.cancelScheduledValues(now)
+      masterGain.gain.setTargetAtTime(muted ? 0 : 0.45, now, 0.02)
+    }
+    updateToggleButton()
+  }
+
+  function toggleMute() {
+    if (!ensureContext()) return
+    if (muted) {
+      resume().then(() => {
+        setMuted(false)
+        playClick()
+      })
+    } else {
+      playClick()
+      setMuted(true)
     }
   }
 
-  // ========== AMBIENCE ==========
-  function createNoise(type) {
-    // Brown noise for city ambience
+  function updateToggleButton() {
+    if (!toggleBtn) return
+    toggleBtn.innerHTML = muted
+      ? '<i class="fa-solid fa-volume-xmark"></i>'
+      : '<i class="fa-solid fa-volume-high"></i>'
+    toggleBtn.setAttribute('aria-label', muted ? 'Enable sound' : 'Mute sound')
+    toggleBtn.title = muted ? 'Enable sound' : 'Mute sound'
+  }
+
+  function attachToggleButton() {
+    if (toggleBtn && document.body.contains(toggleBtn)) return
+    toggleBtn = document.getElementById('wb-audio-toggle')
+    if (!toggleBtn) {
+      toggleBtn = document.createElement('button')
+      toggleBtn.id = 'wb-audio-toggle'
+      toggleBtn.type = 'button'
+      toggleBtn.style.position = 'fixed'
+      toggleBtn.style.right = '14px'
+      toggleBtn.style.bottom = '14px'
+      toggleBtn.style.zIndex = '10001'
+      toggleBtn.style.width = '52px'
+      toggleBtn.style.height = '52px'
+      toggleBtn.style.border = '1px solid rgba(255,255,255,0.12)'
+      toggleBtn.style.borderRadius = '16px'
+      toggleBtn.style.background = 'rgba(17,24,39,0.92)'
+      toggleBtn.style.color = '#f0f4ff'
+      toggleBtn.style.boxShadow = '0 12px 32px rgba(0,0,0,0.35)'
+      toggleBtn.style.cursor = 'pointer'
+      toggleBtn.style.backdropFilter = 'blur(12px)'
+      document.body.appendChild(toggleBtn)
+    }
+    toggleBtn.onclick = toggleMute
+    updateToggleButton()
+  }
+
+  function createNoiseBuffer() {
     const bufferSize = audioCtx.sampleRate * 2
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate)
     const data = buffer.getChannelData(0)
     let last = 0
     for (let i = 0; i < bufferSize; i++) {
       const white = Math.random() * 2 - 1
-      // Brown noise filter
-      last = (last + (0.02 * white)) / 1.02
+      last = (last + 0.02 * white) / 1.02
       data[i] = last * 3.5
     }
+    return buffer
+  }
+
+  function createNoiseSource() {
     const source = audioCtx.createBufferSource()
-    source.buffer = buffer
+    source.buffer = createNoiseBuffer()
     source.loop = true
     return source
   }
 
+  function disconnectNodes(nodes) {
+    nodes.forEach(node => {
+      try { if (node.stop) node.stop() } catch (_) {}
+      try { node.disconnect() } catch (_) {}
+    })
+  }
+
   function startAmbience() {
     if (!initialized) return
-    stopAmbience()
+    disconnectNodes(ambienceNodes)
+    ambienceNodes = []
 
-    // Gentle brown noise backdrop
-    const noise = createNoise()
-    const noiseFilter = audioCtx.createBiquadFilter()
-    noiseFilter.type = 'lowpass'
-    noiseFilter.frequency.value = 400
-    noiseFilter.Q.value = 0.5
+    const noise = createNoiseSource()
+    const lowpass = audioCtx.createBiquadFilter()
+    lowpass.type = 'lowpass'
+    lowpass.frequency.value = 380
     const noiseGain = audioCtx.createGain()
-    noiseGain.gain.value = 0.08
-    noise.connect(noiseFilter)
-    noiseFilter.connect(noiseGain)
+    noiseGain.gain.value = 0.07
+    noise.connect(lowpass)
+    lowpass.connect(noiseGain)
     noiseGain.connect(ambienceGain)
     noise.start()
-    ambienceNodes.push(noise, noiseFilter, noiseGain)
 
-    // Subtle city drone (low hum)
     const drone = audioCtx.createOscillator()
     drone.type = 'sine'
-    drone.frequency.value = 80
+    drone.frequency.value = 82
     const droneGain = audioCtx.createGain()
-    droneGain.gain.value = 0.04
+    droneGain.gain.value = 0.035
     drone.connect(droneGain)
     droneGain.connect(ambienceGain)
     drone.start()
-    ambienceNodes.push(drone, droneGain)
 
-    // Higher harmonic
     const hum = audioCtx.createOscillator()
-    hum.type = 'sine'
-    hum.frequency.value = 160
+    hum.type = 'triangle'
+    hum.frequency.value = 164
     const humGain = audioCtx.createGain()
-    humGain.gain.value = 0.015
+    humGain.gain.value = 0.012
     hum.connect(humGain)
     humGain.connect(ambienceGain)
     hum.start()
-    ambienceNodes.push(hum, humGain)
+
+    ambienceNodes = [noise, lowpass, noiseGain, drone, droneGain, hum, humGain]
   }
 
-  function stopAmbience() {
-    ambienceNodes.forEach(node => {
-      try { if (node.stop) node.stop() } catch(e) {}
-      try { node.disconnect() } catch(e) {}
-    })
-    ambienceNodes = []
+  function updateMusic() {
+    if (!initialized) return
+    disconnectNodes(musicNodes)
+    musicNodes = []
+
+    const isNight = currentDayPhase === 'night'
+    const root = isNight ? 130.81 : 164.81
+    const third = isNight ? 155.56 : 196.0
+
+    const osc1 = audioCtx.createOscillator()
+    osc1.type = 'sine'
+    osc1.frequency.value = root
+    const gain1 = audioCtx.createGain()
+    gain1.gain.value = 0.05
+    osc1.connect(gain1)
+    gain1.connect(musicGain)
+    osc1.start()
+
+    const osc2 = audioCtx.createOscillator()
+    osc2.type = 'sine'
+    osc2.frequency.value = third
+    const gain2 = audioCtx.createGain()
+    gain2.gain.value = 0.035
+    osc2.connect(gain2)
+    gain2.connect(musicGain)
+    osc2.start()
+
+    const lfo = audioCtx.createOscillator()
+    lfo.type = 'sine'
+    lfo.frequency.value = isNight ? 0.1 : 0.18
+    const lfoGain = audioCtx.createGain()
+    lfoGain.gain.value = isNight ? 0.012 : 0.018
+    lfo.connect(lfoGain)
+    lfoGain.connect(gain1.gain)
+    lfo.start()
+
+    musicNodes = [osc1, gain1, osc2, gain2, lfo, lfoGain]
   }
 
-  // ========== CONSTRUCTION SFX ==========
-  function playConstruction() {
-    if (!initialized || muted) return
-    resumeCtx()
-    const now = audioCtx.currentTime
+  function stopWeatherAudio() {
+    disconnectNodes(weatherNodes)
+    weatherNodes = []
+  }
 
-    // Hammer hit (noise burst)
-    const hitBuffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate)
-    const hitData = hitBuffer.getChannelData(0)
-    for (let i = 0; i < hitData.length; i++) {
-      hitData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioCtx.sampleRate * 0.03))
+  function setWeather(weather) {
+    currentWeather = weather || 'sunny'
+    if (!initialized) return
+    stopWeatherAudio()
+
+    if (currentWeather === 'rain') {
+      const rain = createNoiseSource()
+      const filter = audioCtx.createBiquadFilter()
+      filter.type = 'highpass'
+      filter.frequency.value = 1800
+      const gain = audioCtx.createGain()
+      gain.gain.value = 0.1
+      rain.connect(filter)
+      filter.connect(gain)
+      gain.connect(ambienceGain)
+      rain.start()
+      weatherNodes = [rain, filter, gain]
+    } else if (currentWeather === 'snow') {
+      const snow = createNoiseSource()
+      const filter = audioCtx.createBiquadFilter()
+      filter.type = 'lowpass'
+      filter.frequency.value = 700
+      const gain = audioCtx.createGain()
+      gain.gain.value = 0.035
+      snow.connect(filter)
+      filter.connect(gain)
+      gain.connect(ambienceGain)
+      snow.start()
+      weatherNodes = [snow, filter, gain]
+    } else if (currentWeather === 'fog') {
+      const fog = audioCtx.createOscillator()
+      fog.type = 'sine'
+      fog.frequency.value = 98
+      const gain = audioCtx.createGain()
+      gain.gain.value = 0.02
+      fog.connect(gain)
+      gain.connect(ambienceGain)
+      fog.start()
+      weatherNodes = [fog, gain]
     }
-    const hitSource = audioCtx.createBufferSource()
-    hitSource.buffer = hitBuffer
-    const hitFilter = audioCtx.createBiquadFilter()
-    hitFilter.type = 'bandpass'
-    hitFilter.frequency.value = 1200
-    hitFilter.Q.value = 2
-    const hitGain = audioCtx.createGain()
-    hitGain.gain.setValueAtTime(0.7, now)
-    hitGain.gain.exponentialRampToValueAtTime(0.01, now + 0.15)
-    hitSource.connect(hitFilter)
-    hitFilter.connect(hitGain)
-    hitGain.connect(sfxGain)
-    hitSource.start(now)
-    hitSource.stop(now + 0.2)
-
-    // Second hit
-    const hit2 = audioCtx.createBufferSource()
-    hit2.buffer = hitBuffer
-    const hit2Gain = audioCtx.createGain()
-    hit2Gain.gain.setValueAtTime(0.5, now + 0.18)
-    hit2Gain.gain.exponentialRampToValueAtTime(0.01, now + 0.33)
-    hit2.connect(hitFilter.cloneNode ? hitFilter : hitGain)
-    hit2.connect(hit2Gain)
-    hit2Gain.connect(sfxGain)
-    hit2.start(now + 0.18)
-    hit2.stop(now + 0.4)
-
-    // Rising tone (construction complete)
-    const tone = audioCtx.createOscillator()
-    tone.type = 'triangle'
-    tone.frequency.setValueAtTime(300, now + 0.25)
-    tone.frequency.exponentialRampToValueAtTime(600, now + 0.55)
-    const toneGain = audioCtx.createGain()
-    toneGain.gain.setValueAtTime(0, now + 0.25)
-    toneGain.gain.linearRampToValueAtTime(0.3, now + 0.35)
-    toneGain.gain.exponentialRampToValueAtTime(0.01, now + 0.65)
-    tone.connect(toneGain)
-    toneGain.connect(sfxGain)
-    tone.start(now + 0.25)
-    tone.stop(now + 0.7)
-
-    // Sparkle (high sine blip)
-    const sparkle = audioCtx.createOscillator()
-    sparkle.type = 'sine'
-    sparkle.frequency.setValueAtTime(1200, now + 0.5)
-    sparkle.frequency.exponentialRampToValueAtTime(1800, now + 0.65)
-    const sparkGain = audioCtx.createGain()
-    sparkGain.gain.setValueAtTime(0.15, now + 0.5)
-    sparkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.75)
-    sparkle.connect(sparkGain)
-    sparkGain.connect(sfxGain)
-    sparkle.start(now + 0.5)
-    sparkle.stop(now + 0.8)
   }
 
-  // ========== CHAT BLIP ==========
+  function playClick() {
+    if (!initialized || muted) return
+    const now = audioCtx.currentTime
+    const osc = audioCtx.createOscillator()
+    osc.type = 'square'
+    osc.frequency.value = 620
+    const gain = audioCtx.createGain()
+    gain.gain.setValueAtTime(0.08, now)
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05)
+    osc.connect(gain)
+    gain.connect(sfxGain)
+    osc.start(now)
+    osc.stop(now + 0.06)
+  }
+
   function playChatBlip() {
     if (!initialized || muted) return
-    resumeCtx()
     const now = audioCtx.currentTime
     const osc = audioCtx.createOscillator()
     osc.type = 'sine'
     osc.frequency.setValueAtTime(880, now)
     osc.frequency.exponentialRampToValueAtTime(660, now + 0.08)
-    const g = audioCtx.createGain()
-    g.gain.setValueAtTime(0.15, now)
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.12)
-    osc.connect(g)
-    g.connect(sfxGain)
+    const gain = audioCtx.createGain()
+    gain.gain.setValueAtTime(0.15, now)
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12)
+    osc.connect(gain)
+    gain.connect(sfxGain)
     osc.start(now)
-    osc.stop(now + 0.15)
+    osc.stop(now + 0.13)
   }
 
-  // ========== UI CLICK ==========
-  function playClick() {
+  function playConstruction() {
     if (!initialized || muted) return
-    resumeCtx()
     const now = audioCtx.currentTime
-    const osc = audioCtx.createOscillator()
-    osc.type = 'square'
-    osc.frequency.value = 600
-    const g = audioCtx.createGain()
-    g.gain.setValueAtTime(0.08, now)
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.04)
-    osc.connect(g)
-    g.connect(sfxGain)
-    osc.start(now)
-    osc.stop(now + 0.05)
-  }
 
-  // ========== DAY/NIGHT MUSIC ==========
-  let musicOsc1 = null, musicOsc2 = null, musicLFO = null
+    const hit = createNoiseSource()
+    const hitFilter = audioCtx.createBiquadFilter()
+    hitFilter.type = 'bandpass'
+    hitFilter.frequency.value = 1200
+    hitFilter.Q.value = 2
+    const hitGain = audioCtx.createGain()
+    hitGain.gain.setValueAtTime(0.55, now)
+    hitGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12)
+    hit.connect(hitFilter)
+    hitFilter.connect(hitGain)
+    hitGain.connect(sfxGain)
+    hit.start(now)
+    hit.stop(now + 0.13)
+
+    const tone = audioCtx.createOscillator()
+    tone.type = 'triangle'
+    tone.frequency.setValueAtTime(280, now + 0.12)
+    tone.frequency.exponentialRampToValueAtTime(620, now + 0.45)
+    const toneGain = audioCtx.createGain()
+    toneGain.gain.setValueAtTime(0.001, now + 0.12)
+    toneGain.gain.linearRampToValueAtTime(0.22, now + 0.22)
+    toneGain.gain.exponentialRampToValueAtTime(0.001, now + 0.55)
+    tone.connect(toneGain)
+    toneGain.connect(sfxGain)
+    tone.start(now + 0.12)
+    tone.stop(now + 0.56)
+  }
 
   function setDayPhase(phase) {
-    if (phase === currentDayPhase || !initialized) return
+    if (!phase || phase === currentDayPhase) return
     currentDayPhase = phase
-    updateMusic()
+    if (initialized) updateMusic()
   }
 
-  function updateMusic() {
-    if (!initialized || muted) return
-    resumeCtx()
-    const now = audioCtx.currentTime
-
-    // Clean up old music oscillators
-    ;[musicOsc1, musicOsc2, musicLFO].forEach(n => {
-      try { if (n && n.stop) n.stop(now + 0.5) } catch(e) {}
-    })
-
-    // Day = bright major chord, Night = darker minor
-    const isNight = currentDayPhase === 'night'
-    const baseFreq = isNight ? 130.81 : 164.81 // C3 vs E3
-    const thirdFreq = isNight ? 155.56 : 196.00 // Eb3 (minor) vs G3 (major)
-
-    musicOsc1 = audioCtx.createOscillator()
-    musicOsc1.type = 'sine'
-    musicOsc1.frequency.value = baseFreq
-    const mg1 = audioCtx.createGain()
-    mg1.gain.value = 0.06
-    musicOsc1.connect(mg1)
-    mg1.connect(musicGain)
-    musicOsc1.start(now)
-
-    musicOsc2 = audioCtx.createOscillator()
-    musicOsc2.type = 'sine'
-    musicOsc2.frequency.value = thirdFreq
-    const mg2 = audioCtx.createGain()
-    mg2.gain.value = 0.04
-    musicOsc2.connect(mg2)
-    mg2.connect(musicGain)
-    musicOsc2.start(now)
-
-    // LFO for gentle pulsing
-    musicLFO = audioCtx.createOscillator()
-    musicLFO.type = 'sine'
-    musicLFO.frequency.value = isNight ? 0.1 : 0.2
-    const lfoGain = audioCtx.createGain()
-    lfoGain.gain.value = isNight ? 0.015 : 0.02
-    musicLFO.connect(lfoGain)
-    lfoGain.connect(mg1.gain)
-    musicLFO.start(now)
+  function installGlobalInteractionHooks() {
+    const unlock = async () => {
+      await resume()
+    }
+    window.addEventListener('pointerdown', unlock, { passive: true })
+    window.addEventListener('touchstart', unlock, { passive: true })
+    window.addEventListener('keydown', unlock)
   }
 
-  // ========== WEATHER AUDIO ==========
-  let rainSource = null, rainFilter = null, rainGain2 = null
+  attachToggleButton()
+  installGlobalInteractionHooks()
 
-  function setWeather(weather) {
-    if (!initialized) return
-    stopWeatherAudio()
-    if (muted) return
-    resumeCtx()
-
-    if (weather === 'rain') {
-      // Rain = filtered noise
-      rainSource = createNoise()
-      rainFilter = audioCtx.createBiquadFilter()
-      rainFilter.type = 'highpass'
-      rainFilter.frequency.value = 2000
-      rainFilter.Q.value = 0.3
-      rainGain2 = audioCtx.createGain()
-      rainGain2.gain.value = 0.12
-      rainSource.connect(rainFilter)
-      rainFilter.connect(rainGain2)
-      rainGain2.connect(ambienceGain)
-      rainSource.start()
-    } else if (weather === 'snow') {
-      // Snow = very quiet, muffled noise
-      rainSource = createNoise()
-      rainFilter = audioCtx.createBiquadFilter()
-      rainFilter.type = 'lowpass'
-      rainFilter.frequency.value = 600
-      rainGain2 = audioCtx.createGain()
-      rainGain2.gain.value = 0.04
-      rainSource.connect(rainFilter)
-      rainFilter.connect(rainGain2)
-      rainGain2.connect(ambienceGain)
-      rainSource.start()
-    } else if (weather === 'fog') {
-      // Fog = low drone
-      rainSource = audioCtx.createOscillator()
-      rainSource.type = 'sine'
-      rainSource.frequency.value = 55
-      rainGain2 = audioCtx.createGain()
-      rainGain2.gain.value = 0.03
-      rainSource.connect(rainGain2)
-      rainGain2.connect(ambienceGain)
-      rainSource.start()
-    }
-    // sunny/cloudy = just ambience, no extra
-  }
-
-  function stopWeatherAudio() {
-    ;[rainSource, rainFilter, rainGain2].forEach(n => {
-      try { if (n && n.stop) n.stop() } catch(e) {}
-      try { if (n) n.disconnect() } catch(e) {}
-    })
-    rainSource = null
-    rainFilter = null
-    rainGain2 = null
-  }
-
-  // ========== MUTE TOGGLE ==========
-  function toggleMute() {
-    if (!ensureContext()) return false
-    resumeCtx()
-    muted = !muted
-    masterGain.gain.setTargetAtTime(muted ? 0 : 0.5, audioCtx.currentTime, 0.1)
-
-    if (!muted) {
-      startAmbience()
-      updateMusic()
-    } else {
-      stopAmbience()
-      stopWeatherAudio()
-    }
-
-    updateMuteButton()
-    return !muted
-  }
-
-  function isMuted() { return muted }
-
-  // ========== UI: MUTE BUTTON ==========
-  function createMuteButton() {
-    const existing = document.getElementById('audio-mute-btn')
-    if (existing) return
-
-    const btn = document.createElement('button')
-    btn.id = 'audio-mute-btn'
-    btn.setAttribute('aria-label', 'Toggle audio')
-    btn.innerHTML = muted
-      ? '<i class="fa-solid fa-volume-xmark"></i>'
-      : '<i class="fa-solid fa-volume-high"></i>'
-    btn.style.cssText = `
-      position: fixed; bottom: 80px; right: 12px; z-index: 200;
-      width: 44px; height: 44px; border-radius: 12px;
-      background: rgba(17,24,39,0.92); border: 1px solid rgba(255,255,255,0.1);
-      color: #8b95b0; display: grid; place-items: center;
-      cursor: pointer; font-size: 1.1rem;
-      backdrop-filter: blur(8px);
-      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-      transition: color 0.2s, border-color 0.2s;
-    `
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      toggleMute()
-    })
-    document.body.appendChild(btn)
-  }
-
-  function updateMuteButton() {
-    const btn = document.getElementById('audio-mute-btn')
-    if (!btn) return
-    btn.innerHTML = muted
-      ? '<i class="fa-solid fa-volume-xmark"></i>'
-      : '<i class="fa-solid fa-volume-high"></i>'
-    btn.style.color = muted ? '#8b95b0' : '#22d3ee'
-    btn.style.borderColor = muted ? 'rgba(255,255,255,0.1)' : 'rgba(34,211,238,0.3)'
-  }
-
-  // ========== DOM HOOKS ==========
-  // Listen for build button clicks to play construction sound
-  document.addEventListener('click', (e) => {
-    const target = e.target
-    if (!target) return
-
-    // Build button
-    if (target.classList.contains('build-btn') || target.closest('.build-btn')) {
-      // Delay slightly so the building actually gets placed first
-      setTimeout(playConstruction, 200)
-    }
-
-    // Chat send button
-    if (target.closest('.chat-input-row button')) {
-      playChatBlip()
-    }
-
-    // Nav/drawer toggles
-    if (target.classList.contains('drawer-toggle') || target.closest('.drawer-toggle') ||
-        target.classList.contains('drawer-close') || target.closest('.drawer-close') ||
-        target.classList.contains('nav-tab') || target.closest('.nav-tab')) {
-      playClick()
-    }
-
-    // Name submit
-    if (target.closest('.name-card button')) {
-      playClick()
-    }
-  }, true)
-
-  // Keyboard: Enter on build input
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const target = e.target
-      if (target && target.classList.contains('build-input')) {
-        setTimeout(playConstruction, 200)
-      }
-      if (target && target.closest('.chat-input-row')) {
-        playChatBlip()
-      }
-    }
-  }, true)
-
-  // Watch for weather/time changes by observing DOM
-  let weatherCheckInterval = setInterval(() => {
-    // Check weather badge in the topbar
-    const weatherBadge = document.querySelector('.stat-badge.weather')
-    if (weatherBadge) {
-      const text = weatherBadge.textContent.toLowerCase()
-      for (const w of ['rain', 'snow', 'fog', 'cloudy', 'sunny']) {
-        if (text.includes(w)) {
-          setWeather(w)
-          break
-        }
-      }
-    }
-
-    // Check day/night overlay for phase
-    const overlay = document.querySelector('.daynight-overlay')
-    if (overlay) {
-      const bg = overlay.style.background || ''
-      if (bg.includes('0.4') || bg.includes('0.5') || bg.includes('0.6') || bg.includes('0.7') || bg.includes('0.3')) {
-        setDayPhase('night')
-      } else {
-        setDayPhase('day')
-      }
-    }
-  }, 3000)
-
-  // Init on load
-  function init() {
-    createMuteButton()
-    // Also re-create button if DOM is rebuilt
-    const appObserver = new MutationObserver(() => {
-      if (!document.getElementById('audio-mute-btn')) {
-        createMuteButton()
-      }
-    })
-    if (document.body) {
-      appObserver.observe(document.body, { childList: true, subtree: false })
-    }
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init)
-  } else {
-    init()
-  }
-
-  // ========== PUBLIC API ==========
   window.WorldAudio = {
+    ensureContext,
+    resume,
     toggleMute,
-    isMuted,
-    playConstruction,
-    playChatBlip,
+    setMuted,
     playClick,
+    playChatBlip,
+    playConstruction,
     setWeather,
     setDayPhase,
-    ensureContext
+    isMuted: () => muted
   }
-
-  console.log('[audio] World Builder audio system loaded (start muted, tap speaker icon to enable)')
 })()

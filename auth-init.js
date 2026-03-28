@@ -18,10 +18,10 @@ window.__worldBuilderSupabase = supabase
 try {
   await clearInvalidRefreshState()
   const { data: { session } } = await supabase.auth.getSession()
-  if (session) {
-    console.log('[auth-init] Existing session found, uid:', session.user?.id)
+  if (session?.user) {
+    console.log('[auth-init] Existing session found, uid:', session.user.id)
   } else {
-    console.log('[auth-init] No session -- showing auth overlay')
+    console.log('[auth-init] No valid session -- showing auth overlay')
     await showAuthOverlay()
   }
 } catch (e) {
@@ -35,12 +35,12 @@ async function clearInvalidRefreshState() {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return
     const parsed = JSON.parse(raw)
-    const hasRefreshToken = !!parsed?.refresh_token
+    const hasRefreshToken = !!parsed?.refresh_token || !!parsed?.currentSession?.refresh_token
     if (!hasRefreshToken) {
       localStorage.removeItem(STORAGE_KEY)
       return
     }
-  } catch (error) {
+  } catch (_) {
     localStorage.removeItem(STORAGE_KEY)
   }
 
@@ -72,6 +72,9 @@ function friendlyError(msg) {
 
 function showAuthOverlay() {
   return new Promise((resolve) => {
+    const existingStyle = document.getElementById('wb-auth-style')
+    if (existingStyle) existingStyle.remove()
+
     const styleEl = document.createElement('style')
     styleEl.id = 'wb-auth-style'
     styleEl.textContent = `
@@ -94,21 +97,15 @@ function showAuthOverlay() {
         text-align: center;
         box-shadow: 0 16px 48px rgba(0,0,0,0.4);
       }
-      #wb-auth-card .wb-logo {
-        font-size: 2.5rem; margin-bottom: 12px; display: block;
-      }
+      #wb-auth-card .wb-logo { font-size: 2.5rem; margin-bottom: 12px; display: block; }
       #wb-auth-card h1 {
         font-family: 'Press Start 2P', monospace;
         font-size: 1.2rem; margin: 0 0 8px;
         background: linear-gradient(135deg, #6366f1, #f472b6);
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
       }
-      #wb-auth-card p.wb-sub {
-        color: #8b95b0; line-height: 1.6; margin: 0 0 24px;
-      }
-      #wb-auth-card .wb-form-group {
-        margin-bottom: 14px; text-align: left;
-      }
+      #wb-auth-card p.wb-sub { color: #8b95b0; line-height: 1.6; margin: 0 0 24px; }
+      #wb-auth-card .wb-form-group { margin-bottom: 14px; text-align: left; }
       #wb-auth-card label {
         display: block; margin-bottom: 6px; font-size: 0.82rem;
         text-transform: uppercase; letter-spacing: 0.1em;
@@ -137,25 +134,13 @@ function showAuthOverlay() {
         color: white; font-weight: 800; font-size: 1rem;
         cursor: pointer; margin-bottom: 12px;
         box-shadow: 0 8px 24px rgba(99,102,241,0.3);
-        transition: transform 0.15s, opacity 0.15s;
       }
-      #wb-auth-card .wb-btn-primary:hover { transform: translateY(-1px); }
-      #wb-auth-card .wb-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+      #wb-auth-card .wb-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
       #wb-auth-card .wb-switch {
         background: none; border: none;
         color: #8b95b0; cursor: pointer; font-size: 0.9rem;
       }
       #wb-auth-card .wb-switch strong { color: #fbbf24; }
-      #wb-auth-card .wb-check-email {
-        padding: 20px 0;
-      }
-      #wb-auth-card .wb-check-email .wb-icon {
-        font-size: 2.5rem; margin-bottom: 12px; display: block;
-        color: #22d3ee;
-      }
-      #wb-auth-card .wb-check-email p {
-        color: #8b95b0; line-height: 1.7; margin: 0 0 20px;
-      }
       #wb-auth-card .wb-btn-secondary {
         width: 100%; padding: 14px;
         background: rgba(255,255,255,0.06);
@@ -163,9 +148,7 @@ function showAuthOverlay() {
         border-radius: 14px;
         color: #f0f4ff; font-weight: 700; font-size: 0.95rem;
         cursor: pointer;
-        transition: transform 0.15s;
       }
-      #wb-auth-card .wb-btn-secondary:hover { transform: translateY(-1px); }
     `
     document.head.appendChild(styleEl)
 
@@ -173,13 +156,15 @@ function showAuthOverlay() {
     let pendingEmail = ''
     let busy = false
 
-    function getOverlay() { return document.getElementById('wb-auth-overlay') }
+    function getOverlay() {
+      return document.getElementById('wb-auth-overlay')
+    }
 
     function cleanup() {
-      const ov = getOverlay()
-      if (ov) ov.remove()
-      const st = document.getElementById('wb-auth-style')
-      if (st) st.remove()
+      const overlay = getOverlay()
+      if (overlay) overlay.remove()
+      const style = document.getElementById('wb-auth-style')
+      if (style) style.remove()
     }
 
     function renderAuthUI() {
@@ -193,12 +178,10 @@ function showAuthOverlay() {
       if (mode === 'check-email') {
         overlay.innerHTML = `
           <div id="wb-auth-card">
-            <div class="wb-check-email">
-              <span class="wb-icon"><i class="fa-solid fa-envelope-open-text"></i></span>
-              <h1>Check your email</h1>
-              <p>We sent a confirmation link to <strong>${pendingEmail}</strong>. Click the link in the email, then come back and sign in.</p>
-              <button class="wb-btn-secondary" id="wb-goto-signin">Go to Sign In</button>
-            </div>
+            <span class="wb-logo"><i class="fa-solid fa-envelope-open-text"></i></span>
+            <h1>Check your email</h1>
+            <p class="wb-sub">We sent a confirmation link to <strong>${pendingEmail}</strong>. Click the link, then come back and sign in.</p>
+            <button class="wb-btn-secondary" id="wb-goto-signin">Go to Sign In</button>
           </div>
         `
         document.getElementById('wb-goto-signin').addEventListener('click', () => {
@@ -213,7 +196,7 @@ function showAuthOverlay() {
         <div id="wb-auth-card">
           <span class="wb-logo"><i class="fa-solid fa-cubes"></i></span>
           <h1>World Builder</h1>
-          <p class="wb-sub">${isSignup ? 'Create an account to start building.' : 'Sign in to your world.'}</p>
+          <p class="wb-sub">${isSignup ? 'Create an account to start building.' : 'Sign in with your email and password to open the world builder.'}</p>
           <form id="wb-auth-form">
             <div class="wb-form-group">
               <label>Email</label>
@@ -263,9 +246,8 @@ function showAuthOverlay() {
                   errorEl.textContent = friendlyError(signIn.error.message)
                   return
                 }
-                console.log('[auth-init] Signed in, uid:', signIn.data.user?.id)
                 cleanup()
-                resolve()
+                resolve(signIn.data.session)
                 return
               }
               errorEl.textContent = friendlyError(error.message)
@@ -273,9 +255,8 @@ function showAuthOverlay() {
             }
 
             if (data?.session?.user) {
-              console.log('[auth-init] Signed up + auto-confirmed, uid:', data.session.user.id)
               cleanup()
-              resolve()
+              resolve(data.session)
               return
             }
 
@@ -291,17 +272,16 @@ function showAuthOverlay() {
             return
           }
 
-          console.log('[auth-init] Signed in, uid:', data.user?.id)
           cleanup()
-          resolve()
-        } catch (err) {
-          errorEl.textContent = friendlyError(err.message)
+          resolve(data.session)
+        } catch (error) {
+          errorEl.textContent = friendlyError(error?.message)
         } finally {
           busy = false
-          const btn = document.getElementById('wb-submit')
-          if (btn) {
-            btn.disabled = false
-            btn.textContent = mode === 'signup' ? 'Create account' : 'Sign in'
+          const nextSubmitBtn = document.getElementById('wb-submit')
+          if (nextSubmitBtn) {
+            nextSubmitBtn.disabled = false
+            nextSubmitBtn.textContent = isSignup ? 'Create account' : 'Sign in'
           }
         }
       })
