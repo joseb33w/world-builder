@@ -354,6 +354,9 @@
     playConstruction,
     setWeather,
     setDayPhase,
-    attachToggleButton
+    attachToggleButton,
+    get muted() {
+      return muted
+    }
   }
 })()
