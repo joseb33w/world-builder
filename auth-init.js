@@ -14,6 +14,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 })
 
 window.__worldBuilderSupabase = supabase
+window.__worldBuilderShowAuth = showAuthOverlay
 
 try {
   await clearInvalidRefreshState()
@@ -74,6 +75,9 @@ function showAuthOverlay() {
   return new Promise((resolve) => {
     const existingStyle = document.getElementById('wb-auth-style')
     if (existingStyle) existingStyle.remove()
+
+    const existingOverlay = document.getElementById('wb-auth-overlay')
+    if (existingOverlay) existingOverlay.remove()
 
     const styleEl = document.createElement('style')
     styleEl.id = 'wb-auth-style'
@@ -281,7 +285,7 @@ function showAuthOverlay() {
           const nextSubmitBtn = document.getElementById('wb-submit')
           if (nextSubmitBtn) {
             nextSubmitBtn.disabled = false
-            nextSubmitBtn.textContent = isSignup ? 'Create account' : 'Sign in'
+            nextSubmitBtn.textContent = mode === 'signup' ? 'Create account' : 'Sign in'
           }
         }
       })
