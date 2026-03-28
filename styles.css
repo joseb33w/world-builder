@@ -1,23 +1,23 @@
-:root {
-  --bg: #0a0e1a;
-  --bg2: #111827;
-  --panel: rgba(17, 24, 39, 0.95);
-  --panel-glass: rgba(17, 24, 39, 0.82);
-  --line: rgba(255,255,255,0.08);
-  --text: #f0f4ff;
-  --muted: #8b95b0;
-  --accent: #6366f1;
-  --accent2: #8b5cf6;
-  --green: #34d399;
-  --yellow: #fbbf24;
-  --orange: #fb923c;
-  --pink: #f472b6;
-  --cyan: #22d3ee;
-  --red: #f87171;
-  --shadow: 0 16px 48px rgba(0,0,0,0.4);
-  --radius: 16px;
-  --radius-sm: 10px;
-}
+:root {                                                                                        
+      --bg: #0d0221;                                                                             
+      --bg2: #1a0a3e;                                                                            
+      --panel: rgba(26, 10, 62, 0.95);                                                           
+      --panel-glass: rgba(26, 10, 62, 0.82);                                                     
+      --line: rgba(255,100,255,0.08);                                                            
+      --text: #ffe6ff;                                                                           
+      --muted: #b088c0;                                                                          
+      --accent: #ff6ec7;                                                                         
+      --accent2: #7b2ff7;                                                                        
+      --green: #00ff88;                                                                          
+      --yellow: #ffe566;                                                                         
+      --orange: #ff7733;                                                                         
+      --pink: #ff6ec7;                                                                           
+      --cyan: #00e5ff;
+      --red: #ff3366;                                                                            
+      --shadow: 0 16px 48px rgba(127,0,255,0.4);                                                 
+      --radius: 16px;
+      --radius-sm: 10px;                                                                         
+  }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 100%; height: 100%; overflow: hidden; }
 body {
